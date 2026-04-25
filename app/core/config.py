@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://192.168.4.13:8080/v1"
     llm_api_key: str = "sk-mi-ia-secreta"
     llm_model: str = "gemma4"
-    llm_timeout_seconds: float = 30.0
+    llm_timeout_seconds: float = 300.0
     llm_enabled: bool = True
     llm_max_tokens: int = 2048
 

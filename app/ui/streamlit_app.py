@@ -109,62 +109,106 @@ ASSET_OFFSETS = {
 
 
 # ---------------------------------------------------------------------------
-# Data preparation — LLM-enhanced, scenario-aware
+# Data preparation — 3 cached layers: analysis (fast), COAs (medium), LLM (slow)
 # ---------------------------------------------------------------------------
 
 @st.cache_data
-def build_dashboard_data(
-    scenario_id: str = "baltic_hybrid_001",
-    asset_inventory_items: tuple[tuple[str, int], ...] | None = None,
-) -> dict[str, Any]:
-    """Run the full analysis pipeline with LLM enrichment."""
-    asset_inventory = dict(asset_inventory_items or tuple(DEFAULT_ASSET_INVENTORY.items()))
-
-    # Load the correct scenario
+def _run_analysis(scenario_id: str) -> dict[str, Any]:
+    """Fast rule-based analysis — only depends on scenario, ~1 second."""
     scenario = load_scenario(scenario_id)
     if not scenario.events:
         raise ValueError(f"Scenario {scenario_id} has no events")
 
     events = scenario.events
     infrastructure = [ci.model_dump() for ci in scenario.critical_infrastructure] if scenario.critical_infrastructure else None
-    scenario_name = scenario.name
-
-    # Rule-based pipeline
     features = compute_features(events, infrastructure)
     anomalies = detect_anomalies(events, features)
     threats = assess_threats(events, features, anomalies)
 
-    # LLM-enhanced COA generation (falls back to rule-based if LLM unavailable)
-    coas = generate_coas_with_llm(events, threats, asset_inventory)
+    return {
+        "scenario": scenario, "events": events, "features": features,
+        "anomalies": anomalies, "threats": threats,
+    }
 
+
+@st.cache_data
+def _run_coa_pipeline(
+    scenario_id: str,
+    asset_inventory_items: tuple[tuple[str, int], ...],
+) -> dict[str, Any]:
+    """COA generation + simulation + scoring — depends on scenario + assets."""
+    asset_inventory = dict(asset_inventory_items)
+    analysis = _run_analysis(scenario_id)
+    events = analysis["events"]
+    threats = analysis["threats"]
+
+    coas = generate_coas_with_llm(events, threats, asset_inventory)
     sims = run_simulations(coas, events, threats)
     scored = score_coas(coas, sims)
     rec = recommend(scored)
 
-    # LLM enrichment: threat narrative
+    return {
+        "coas": coas, "sims": sims, "scored": scored,
+        "recommendation": rec, "asset_inventory": asset_inventory,
+    }
+
+
+@st.cache_data
+def _run_llm_enrichment(scenario_id: str) -> dict[str, Any]:
+    """Slow LLM enrichment — only depends on scenario, runs once per scenario."""
+    analysis = _run_analysis(scenario_id)
+    events = analysis["events"]
+    threats = analysis["threats"]
+
     threat_narrative = enrich_threat_narrative(threats, events)
-    if threat_narrative:
-        rec = rec.model_copy(update={"threat_narrative": threat_narrative})
 
-    # Base briefing from rules
-    briefing = generate_briefing(events, anomalies, threats, scored, rec, scenario_name)
-
-    # LLM enrichment: briefing
-    threat_ctx = threat_narrative or " ".join(
-        f"{t.entity_id}: {t.threat_probability:.0%}" for t in threats[:5]
-    )
-    enriched = enrich_briefing(briefing.assessment, threat_ctx)
-    if enriched:
-        briefing = briefing.model_copy(update={"enriched_assessment": enriched})
-
-    # LLM enrichment: entity risk narratives
     entity_narratives: dict[str, str] = {}
-    for t in threats[:5]:
+    for t in threats[:3]:
         narrative = entity_risk_narrative(t.entity_id, t, events)
         if narrative:
             entity_narratives[t.entity_id] = narrative
-    if entity_narratives:
-        briefing = briefing.model_copy(update={"entity_risk_narratives": entity_narratives})
+
+    return {
+        "threat_narrative": threat_narrative,
+        "entity_narratives": entity_narratives,
+    }
+
+
+@st.cache_data
+def build_dashboard_data(
+    scenario_id: str = "baltic_hybrid_001",
+    asset_inventory_items: tuple[tuple[str, int], ...] | None = None,
+) -> dict[str, Any]:
+    """Combine all layers — fast re-run when only assets change."""
+    asset_inventory_items = asset_inventory_items or tuple(DEFAULT_ASSET_INVENTORY.items())
+    asset_inventory = dict(asset_inventory_items)
+
+    analysis = _run_analysis(scenario_id)
+    coa_data = _run_coa_pipeline(scenario_id, asset_inventory_items)
+    llm_data = _run_llm_enrichment(scenario_id)
+
+    events = analysis["events"]
+    anomalies = analysis["anomalies"]
+    threats = analysis["threats"]
+    scenario = analysis["scenario"]
+    scenario_name = scenario.name
+    coas = coa_data["coas"]
+    sims = coa_data["sims"]
+    scored = coa_data["scored"]
+    rec = coa_data["recommendation"]
+
+    if llm_data["threat_narrative"]:
+        rec = rec.model_copy(update={"threat_narrative": llm_data["threat_narrative"]})
+
+    briefing = generate_briefing(events, anomalies, threats, scored, rec, scenario_name)
+
+    if llm_data["threat_narrative"]:
+        enriched = enrich_briefing(briefing.assessment, llm_data["threat_narrative"])
+        if enriched:
+            briefing = briefing.model_copy(update={"enriched_assessment": enriched})
+
+    if llm_data["entity_narratives"]:
+        briefing = briefing.model_copy(update={"entity_risk_narratives": llm_data["entity_narratives"]})
 
     return {
         "scenario": scenario, "events": events, "anomalies": anomalies,
@@ -369,10 +413,12 @@ def main():
             if st.button("Reset"):
                 st.session_state.asset_inventory = dict(DEFAULT_ASSET_INVENTORY)
                 build_dashboard_data.clear()
+                _run_coa_pipeline.clear()
                 st.rerun()
         with col_run:
             if st.button("Re-analyze"):
                 build_dashboard_data.clear()
+                _run_coa_pipeline.clear()
                 st.rerun()
 
     # ---- Run pipeline ----
