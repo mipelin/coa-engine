@@ -6,7 +6,9 @@ from ..core.config import settings
 from ..core.constants import EntityType, EventType
 from ..core.schemas import CourseOfAction, OperationalEvent, SimulationResult, ThreatResult
 
-RNG_SEED = 42
+import logging
+
+logger = logging.getLogger("coa_engine.engine.simulation")
 
 
 def _scenario_baseline(events: list[OperationalEvent], threats: list[ThreatResult]) -> dict:
@@ -28,7 +30,7 @@ def run_simulations(
 ) -> list[SimulationResult]:
     """Run Monte Carlo-style simulation for each COA."""
     baseline = _scenario_baseline(events, threats)
-    rng = np.random.default_rng(RNG_SEED)
+    rng = np.random.default_rng(settings.simulation_seed)
     results: list[SimulationResult] = []
 
     for coa in coas:

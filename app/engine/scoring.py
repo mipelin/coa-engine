@@ -1,15 +1,11 @@
 from __future__ import annotations
 
+import logging
+
+from ..core.config import settings
 from ..core.schemas import CourseOfAction, ScoredCOA, SimulationResult
 
-# Scoring weights (must sum to 1.0)
-W_SUCCESS = 0.30
-W_TIME = 0.10
-W_CABLE_PROTECT = 0.20
-W_ESCALATION = 0.15
-W_CIVILIAN = 0.10
-W_LOGISTICS = 0.05
-W_MISSED_DET = 0.10
+logger = logging.getLogger("coa_engine.engine.scoring")
 
 
 def _normalize_time(time_min: float, max_time: float = 120.0) -> float:
@@ -42,16 +38,14 @@ def score_coas(
         feasibility = coa.feasibility_score
 
         raw = (
-            W_SUCCESS * success
-            + W_TIME * time_score
-            + W_CABLE_PROTECT * cable_protect
-            + W_ESCALATION * escalation
-            + W_CIVILIAN * civilian
-            + W_LOGISTICS * logistics
-            + W_MISSED_DET * detection
+            settings.scoring_weight_success * success
+            + settings.scoring_weight_time * time_score
+            + settings.scoring_weight_cable_protect * cable_protect
+            + settings.scoring_weight_escalation * escalation
+            + settings.scoring_weight_civilian * civilian
+            + settings.scoring_weight_logistics * logistics
+            + settings.scoring_weight_missed_detection * detection
         )
-        # Infeasible COAs should not outrank executable ones simply because their
-        # theoretical performance is strong on paper.
         raw *= 0.2 + 0.8 * feasibility
         total = round(raw * 100.0, 1)
 
@@ -88,5 +82,9 @@ def score_coas(
     scored.sort(key=lambda s: s.total_score, reverse=True)
     for i, s in enumerate(scored, 1):
         s.rank = i
+
+    logger.info("Scoring: %d COAs ranked, top=%s (%.1f)",
+                len(scored), scored[0].coa.coa_id if scored else "N/A",
+                scored[0].total_score if scored else 0)
 
     return scored

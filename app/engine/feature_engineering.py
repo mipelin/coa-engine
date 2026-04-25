@@ -4,6 +4,9 @@ import math
 from collections import Counter, defaultdict
 
 from ..core.constants import CRITICAL_INFRASTRUCTURE, EntityType, EventType
+import logging
+
+logger = logging.getLogger("coa_engine.engine.feature_engineering")
 from ..core.schemas import FeatureVector, OperationalEvent
 
 EARTH_RADIUS_KM = 6371.0
@@ -19,11 +22,12 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return EARTH_RADIUS_KM * 2 * math.asin(math.sqrt(a))
 
 
-def _distance_to_nearest_infra(event: OperationalEvent) -> tuple[float, float]:
+def _distance_to_nearest_infra(event: OperationalEvent, infrastructure: list[dict] | None = None) -> tuple[float, float]:
     """Return (nearest distance km, second-cable distance km)."""
+    infra_list = infrastructure or CRITICAL_INFRASTRUCTURE
     cable_dists = []
     min_dist = float("inf")
-    for infra in CRITICAL_INFRASTRUCTURE:
+    for infra in infra_list:
         d = haversine_km(event.lat, event.lon, infra["lat"], infra["lon"])
         if d < min_dist:
             min_dist = d
@@ -71,7 +75,7 @@ def _heading_towards_critical_asset(event: OperationalEvent) -> float:
     return min_score
 
 
-def compute_features(events: list[OperationalEvent]) -> list[FeatureVector]:
+def compute_features(events: list[OperationalEvent], infrastructure: list[dict] | None = None) -> list[FeatureVector]:
     """Compute a FeatureVector for every event in the list."""
     if not events:
         return []
@@ -111,7 +115,7 @@ def compute_features(events: list[OperationalEvent]) -> list[FeatureVector]:
 
     features: list[FeatureVector] = []
     for event in sorted_events:
-        dist_nearest, dist_second_cable = _distance_to_nearest_infra(event)
+        dist_nearest, dist_second_cable = _distance_to_nearest_infra(event, infrastructure)
 
         proximity_incident = 1.0 / (1.0 + dist_nearest)
 

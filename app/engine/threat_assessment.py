@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 
 from ..core.config import settings
 from ..core.constants import EntityType, EventType, ThreatLevel
 from ..core.schemas import AnomalyResult, FeatureVector, OperationalEvent, ThreatResult
+
+logger = logging.getLogger("coa_engine.engine.threat_assessment")
 
 EXCLUDE_FROM_THREAT_RANKING = {
     EntityType.ALLIED_VESSEL,
@@ -91,11 +94,11 @@ def assess_threats(
         )
 
         probability = (
-            max_anom_score * 0.40
-            + avg_anom_score * 0.15
-            + min(event_type_boost, 0.30) * 0.30
-            + avg_heading * 0.08
-            + avg_jamming * 0.07
+            max_anom_score * settings.threat_weight_max_anomaly
+            + avg_anom_score * settings.threat_weight_avg_anomaly
+            + min(event_type_boost, 0.30) * settings.threat_weight_event_type_boost
+            + avg_heading * settings.threat_weight_heading
+            + avg_jamming * settings.threat_weight_jamming
         )
 
         if has_cable_severance and primary_type == EntityType.SUSPICIOUS_VESSEL:
@@ -103,12 +106,12 @@ def assess_threats(
                 (f.distance_to_nearest_critical_infrastructure for f in feats), default=999.0
             )
             if min_dist < 10.0:
-                probability += 0.10
+                probability += settings.threat_cable_severance_vessel_boost
 
         if primary_type == EntityType.UAV:
-            probability += 0.05 * avg_heading
+            probability += settings.threat_uav_heading_boost * avg_heading
 
-        probability += avg_convoy * 0.05
+        probability += avg_convoy * settings.threat_weight_convoy
         probability = min(max(probability, 0.0), 1.0)
 
         level = _classify_threat(probability)
@@ -146,4 +149,7 @@ def assess_threats(
         ))
 
     results.sort(key=lambda r: r.threat_probability, reverse=True)
+    logger.info("Threat assessment: %d entities, top threat=%s (%.1f%%)",
+                len(results), results[0].entity_id if results else "N/A",
+                results[0].threat_probability * 100 if results else 0)
     return results

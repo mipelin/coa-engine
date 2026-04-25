@@ -234,7 +234,7 @@ def test_briefing_no_unsafe_language():
 
 
 def test_coa_generate_endpoint():
-    resp = client.post("/coa/generate", json={})
+    resp = client.post("/v1/coa/generate", json={})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -245,7 +245,7 @@ def test_coa_generate_endpoint():
 
 
 def test_simulation_endpoint():
-    resp = client.post("/coa/simulation/run", json={})
+    resp = client.post("/v1/coa/simulation/run", json={})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -256,7 +256,7 @@ def test_simulation_endpoint():
 
 
 def test_recommendation_endpoint():
-    resp = client.post("/coa/recommendation/run", json={})
+    resp = client.post("/v1/coa/recommendation/run", json={})
     assert resp.status_code == 200
     body = resp.json()
     assert body["recommended"]["rank"] == 1
@@ -265,7 +265,7 @@ def test_recommendation_endpoint():
 
 
 def test_briefing_endpoint():
-    resp = client.post("/coa/briefing/generate", json={})
+    resp = client.post("/v1/coa/briefing/generate", json={})
     assert resp.status_code == 200
     body = resp.json()
     assert body["situation"]

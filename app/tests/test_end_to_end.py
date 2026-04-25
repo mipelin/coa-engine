@@ -19,12 +19,12 @@ UNSAFE_WORDS = [
 def _full_pipeline():
     """Hit every endpoint in sequence and return all responses."""
     health = client.get("/health")
-    scenario = client.get("/scenario/sample")
-    analysis = client.post("/analysis/run", json={})
-    coas = client.post("/coa/generate", json={})
-    sim = client.post("/coa/simulation/run", json={})
-    rec = client.post("/coa/recommendation/run", json={})
-    briefing = client.post("/coa/briefing/generate", json={})
+    scenario = client.get("/v1/scenario/sample")
+    analysis = client.post("/v1/analysis/run", json={})
+    coas = client.post("/v1/coa/generate", json={})
+    sim = client.post("/v1/coa/simulation/run", json={})
+    rec = client.post("/v1/coa/recommendation/run", json={})
+    briefing = client.post("/v1/coa/briefing/generate", json={})
     return {
         "health": health,
         "scenario": scenario,
@@ -46,11 +46,11 @@ def test_health_structure():
     resp = client.get("/health")
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.1.0"
+    assert body["version"] == "0.2.0"
 
 
 def test_scenario_validates():
-    resp = client.get("/scenario/sample")
+    resp = client.get("/v1/scenario/sample")
     scenario = Scenario.model_validate(resp.json())
     assert scenario.scenario_id == "baltic_hybrid_001"
     assert len(scenario.events) == 20
@@ -59,7 +59,7 @@ def test_scenario_validates():
 
 
 def test_analysis_pipeline_completes():
-    resp = client.post("/analysis/run", json={})
+    resp = client.post("/v1/analysis/run", json={})
     body = resp.json()
     assert body["status"] == "ok"
     assert body["events_processed"] == 20
@@ -77,7 +77,7 @@ def test_analysis_pipeline_completes():
 
 
 def test_coa_generation_completes():
-    resp = client.post("/coa/generate", json={})
+    resp = client.post("/v1/coa/generate", json={})
     body = resp.json()
     assert body["status"] == "ok"
     assert len(body["coas"]) >= 5
@@ -90,7 +90,7 @@ def test_coa_generation_completes():
 
 
 def test_simulation_completes():
-    resp = client.post("/coa/simulation/run", json={})
+    resp = client.post("/v1/coa/simulation/run", json={})
     body = resp.json()
     assert body["status"] == "ok"
     assert len(body["simulations"]) >= 5
@@ -102,7 +102,7 @@ def test_simulation_completes():
 
 
 def test_recommendation_completes():
-    resp = client.post("/coa/recommendation/run", json={})
+    resp = client.post("/v1/coa/recommendation/run", json={})
     body = resp.json()
     assert body["recommended"]["rank"] == 1
     assert len(body["rationale"]) > 0
@@ -111,7 +111,7 @@ def test_recommendation_completes():
 
 
 def test_briefing_completes():
-    resp = client.post("/coa/briefing/generate", json={})
+    resp = client.post("/v1/coa/briefing/generate", json={})
     body = resp.json()
     assert body["situation"]
     assert len(body["key_indicators"]) > 0
@@ -158,7 +158,7 @@ def test_event_ingestion_via_endpoint():
     payload = {
         "events": [e.model_dump(mode="json") for e in events[:3]]
     }
-    resp = client.post("/events/ingest", json=payload)
+    resp = client.post("/v1/events/ingest", json=payload)
     assert resp.status_code == 200
     body = resp.json()
     assert body["events_received"] == 3
@@ -167,14 +167,14 @@ def test_event_ingestion_via_endpoint():
 
 def test_pipeline_deterministic():
     """Running the pipeline twice produces identical results."""
-    r1 = client.post("/coa/recommendation/run", json={}).json()
-    r2 = client.post("/coa/recommendation/run", json={}).json()
+    r1 = client.post("/v1/coa/recommendation/run", json={}).json()
+    r2 = client.post("/v1/coa/recommendation/run", json={}).json()
     assert r1["recommended"]["coa"]["coa_id"] == r2["recommended"]["coa"]["coa_id"]
     assert r1["recommended"]["total_score"] == r2["recommended"]["total_score"]
 
 
 def test_recommendation_endpoint_accepts_asset_inventory():
-    resp = client.post("/coa/recommendation/run", json={
+    resp = client.post("/v1/coa/recommendation/run", json={
         "asset_inventory": {
             "isr_uav": 0,
             "maritime_patrol_asset": 0,

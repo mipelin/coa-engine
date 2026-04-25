@@ -51,3 +51,31 @@ BALTIC_BOUNDS = {
     "lon_min": 17.0,
     "lon_max": 26.0,
 }
+
+ARCTIC_INFRASTRUCTURE = [
+    {"name": "Svalbard Undersea Cable", "type": "subsea_cable", "lat": 78.0, "lon": 15.0},
+    {"name": "Tromso Naval Station", "type": "military_installation", "lat": 69.65, "lon": 18.96},
+    {"name": "Andoya Space Center", "type": "military_installation", "lat": 69.30, "lon": 16.00},
+    {"name": "Kiruna Radar Station", "type": "military_installation", "lat": 67.85, "lon": 20.22},
+]
+
+ARCTIC_BOUNDS = {
+    "lat_min": 68.0,
+    "lat_max": 80.0,
+    "lon_min": 10.0,
+    "lon_max": 35.0,
+}
+
+MEDITERRANEAN_INFRASTRUCTURE = [
+    {"name": "East Med Gas Pipeline", "type": "pipeline", "lat": 34.5, "lon": 32.0},
+    {"name": "Souda Bay Naval Base", "type": "military_installation", "lat": 35.48, "lon": 24.15},
+    {"name": "Haifa Offshore Platform", "type": "offshore_platform", "lat": 33.10, "lon": 34.80},
+    {"name": "Cyprus Communication Node", "type": "subsea_cable", "lat": 35.17, "lon": 33.37},
+]
+
+MEDITERRANEAN_BOUNDS = {
+    "lat_min": 33.0,
+    "lat_max": 37.0,
+    "lon_min": 22.0,
+    "lon_max": 36.0,
+}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from ..core.constants import EntityType, EventType
 from ..core.schemas import (
     AnomalyResult,
@@ -11,6 +13,8 @@ from ..core.schemas import (
     ThreatResult,
 )
 
+logger = logging.getLogger("coa_engine.engine.explanation")
+
 
 def generate_briefing(
     events: list[OperationalEvent],
@@ -18,6 +22,7 @@ def generate_briefing(
     threats: list[ThreatResult],
     scored: list[ScoredCOA],
     recommendation: Recommendation,
+    scenario_name: str = "Operational Area",
 ) -> Briefing:
     """Generate a commander-style decision-support briefing."""
     if not events:
@@ -48,7 +53,7 @@ def generate_briefing(
     has_convoy = any(e.event_type == EventType.CONVOY_SIGHTING for e in events)
 
     situation_parts = [
-        f"Decision-support summary for Baltic Sea area, {time_range}.",
+        f"Decision-support summary for {scenario_name}, {time_range}.",
         f"{len(events)} events processed across "
         f"{len(set(e.entity_id for e in events))} entities.",
         f"{n_suspicious_vessels} suspicious vessel(s) identified.",

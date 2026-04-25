@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 from ..core.schemas import Recommendation, ScoredCOA
+
+logger = logging.getLogger("coa_engine.engine.recommendation")
 
 
 def recommend(scored: list[ScoredCOA]) -> Recommendation:
@@ -39,6 +43,8 @@ def recommend(scored: list[ScoredCOA]) -> Recommendation:
         )
     if not edge_parts:
         edge_parts.append("No alternative COAs evaluated.")
+
+    logger.info("Recommendation: %s (score %.1f)", best.coa.coa_id, best.total_score)
 
     return Recommendation(
         recommended=best,

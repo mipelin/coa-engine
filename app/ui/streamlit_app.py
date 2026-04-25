@@ -6,9 +6,21 @@ import pandas as pd
 import streamlit as st
 
 from app.core.constants import EntityType, EventType
+from app.core.schemas import (
+    AnomalyResult,
+    Briefing,
+    CourseOfAction,
+    OperationalEvent,
+    Recommendation,
+    ScoredCOA,
+    SimulationResult,
+    ThreatResult,
+)
+
+# Import engine modules for direct fallback when API is unavailable
 from app.engine.anomaly_detection import detect_anomalies
 from app.engine.coa_generation import generate_coas
-from app.engine.event_ingestion import load_sample_scenario, load_scenario_events
+from app.engine.event_ingestion import load_sample_scenario, load_scenario_events, list_scenarios
 from app.engine.explanation import generate_briefing
 from app.engine.feature_engineering import compute_features
 from app.engine.recommendation import recommend
@@ -50,15 +62,56 @@ ASSET_LABELS = {
 
 
 # ---------------------------------------------------------------------------
-# Data preparation — extracted for testability
+# Data preparation — uses API when available, falls back to direct engine
 # ---------------------------------------------------------------------------
 
 @st.cache_data
 def build_dashboard_data(
+    _scenario_id: str = "baltic_hybrid_001",
     asset_inventory_items: tuple[tuple[str, int], ...] | None = None,
+    api_base_url: str = "http://localhost:8002",
 ) -> dict[str, Any]:
-    """Run the full analysis pipeline and return all results."""
+    """Run the full analysis pipeline via API, falling back to direct engine."""
     asset_inventory = dict(asset_inventory_items or tuple(DEFAULT_ASSET_INVENTORY.items()))
+
+    # Try API first
+    try:
+        from app.core.api_client import COAApiClient
+        client = COAApiClient(api_base_url)
+        client.health()  # connectivity check
+        client.load_scenario(_scenario_id)
+
+        analysis = client.run_analysis({"asset_inventory": asset_inventory})
+        coa_data = client.generate_coas({"asset_inventory": asset_inventory})
+        sim_data = client.run_simulation({"asset_inventory": asset_inventory})
+        rec_data = client.run_recommendation({"asset_inventory": asset_inventory})
+        briefing_data = client.generate_briefing({"asset_inventory": asset_inventory})
+        events_data = client.list_events()
+
+        # Deserialize API responses into Pydantic models for rendering
+        events = [OperationalEvent.model_validate(e) for e in analysis.get("features", [])]
+        # Get events from the events endpoint
+        events = [OperationalEvent.model_validate(e) for e in events_data.get("events", analysis.get("events", []))]
+        anomalies = [AnomalyResult.model_validate(a) for a in analysis.get("anomalies", [])]
+        threats = [ThreatResult.model_validate(t) for t in analysis.get("threats", [])]
+        coas = [CourseOfAction.model_validate(c) for c in coa_data.get("coas", [])]
+        sims = [SimulationResult.model_validate(s) for s in sim_data.get("simulations", [])]
+        scored = [ScoredCOA.model_validate(s) for s in [rec_data.get("recommended")] + rec_data.get("alternatives", []) if s]
+        rec = Recommendation.model_validate(rec_data)
+        briefing = Briefing.model_validate(briefing_data)
+        scenario = load_sample_scenario()
+
+        client.close()
+        return {
+            "scenario": scenario, "events": events, "anomalies": anomalies,
+            "threats": threats, "coas": coas, "sims": sims,
+            "scored": scored, "recommendation": rec, "briefing": briefing,
+            "asset_inventory": asset_inventory, "source": "api",
+        }
+    except Exception:
+        pass
+
+    # Fallback: direct engine
     scenario = load_sample_scenario()
     events = load_scenario_events()
     features = compute_features(events)
@@ -70,17 +123,10 @@ def build_dashboard_data(
     rec = recommend(scored)
     briefing = generate_briefing(events, anomalies, threats, scored, rec)
     return {
-        "scenario": scenario,
-        "events": events,
-        "features": features,
-        "anomalies": anomalies,
-        "threats": threats,
-        "coas": coas,
-        "sims": sims,
-        "scored": scored,
-        "recommendation": rec,
-        "briefing": briefing,
-        "asset_inventory": asset_inventory,
+        "scenario": scenario, "events": events, "anomalies": anomalies,
+        "threats": threats, "coas": coas, "sims": sims,
+        "scored": scored, "recommendation": rec, "briefing": briefing,
+        "asset_inventory": asset_inventory, "source": "engine",
     }
 
 
@@ -114,12 +160,18 @@ THREAT_LEVEL_COLORS = {
 }
 
 
-def _marker_color(event_type: EventType, entity_type: EntityType) -> str:
-    if event_type == EventType.CABLE_SEVERANCE:
+def _marker_color(event_type, entity_type) -> str:
+    et = event_type.value if hasattr(event_type, 'value') else str(event_type)
+    if et == "cable_severance":
         return "darkred"
-    if event_type == EventType.JAMMING_DETECTED:
+    if et == "jamming_detected":
         return "darkpurple"
-    return ENTITY_COLORS.get(entity_type, "gray")
+    ent = entity_type.value if hasattr(entity_type, 'value') else str(entity_type)
+    color_map = {
+        "suspicious_vessel": "red", "allied_vessel": "blue", "uav": "orange",
+        "convoy": "purple", "subsea_cable": "darkgreen", "isr_asset": "cadetblue", "airport": "gray",
+    }
+    return color_map.get(ent, "gray")
 
 
 def _threat_color(level: str) -> str:
@@ -133,18 +185,23 @@ def _threat_color(level: str) -> str:
 def build_map(events, scenario) -> Any:
     import folium
 
-    m = folium.Map(location=[57.5, 19.5], zoom_start=6, tiles="CartoDB positron")
+    # Center map on event centroid
+    if events:
+        avg_lat = sum(e.lat for e in events) / len(events)
+        avg_lon = sum(e.lon for e in events) / len(events)
+    else:
+        avg_lat, avg_lon = 57.5, 19.5
 
-    # Critical infrastructure
+    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=5, tiles="CartoDB positron")
+
     for infra in scenario.critical_infrastructure:
-        color = "darkgreen" if infra.type == "subsea_cable" else "darkblue"
+        color = "darkgreen" if infra.type in ("subsea_cable", "pipeline") else "darkblue"
         folium.Marker(
             location=[infra.lat, infra.lon],
             popup=f"<b>{infra.name}</b><br>Type: {infra.type}",
             icon=folium.Icon(color=color, icon="star"),
         ).add_to(m)
 
-    # Events
     seen_positions: set[str] = set()
     for ev in events:
         key = f"{ev.entity_id}:{ev.lat:.2f},{ev.lon:.2f}"
@@ -166,16 +223,13 @@ def build_map(events, scenario) -> Any:
             icon=folium.Icon(color=color, icon=icon, prefix="fa"),
         ).add_to(m)
 
-    # Jamming circles
     for ev in events:
         if ev.event_type == EventType.JAMMING_DETECTED:
             radius_km = ev.attributes.get("radius_nm", 20) * 1.852
             folium.Circle(
                 location=[ev.lat, ev.lon],
                 radius=radius_km * 1000,
-                color="purple",
-                fill=True,
-                fill_opacity=0.08,
+                color="purple", fill=True, fill_opacity=0.08,
                 popup=f"Jamming radius: {ev.attributes.get('radius_nm', 20)} nm",
             ).add_to(m)
 
@@ -203,32 +257,41 @@ def main():
 
     with st.sidebar:
         st.header("Scenario Controls")
-        st.caption("Local synthetic scenario only. No live feeds.")
-        st.selectbox("Scenario", ["Baltic Sea Hybrid Threat Scenario"], index=0, disabled=True)
+        st.caption("Select scenario and adjust assets. No live feeds.")
+
+        scenario_list = list_scenarios()
+        scenario_options = {s["scenario_id"]: s["name"] for s in scenario_list}
+        if not scenario_options:
+            scenario_options = {"baltic_hybrid_001": "Baltic Sea Hybrid Threat Scenario"}
+        selected_scenario = st.selectbox(
+            "Scenario",
+            options=list(scenario_options.keys()),
+            format_func=lambda x: scenario_options[x],
+            index=0,
+        )
+
         st.markdown("**Assets For Simulation**")
         with st.expander("Adjust available assets", expanded=True):
             for asset_key, default_value in DEFAULT_ASSET_INVENTORY.items():
                 st.session_state.asset_inventory[asset_key] = st.number_input(
                     ASSET_LABELS[asset_key],
-                    min_value=0,
-                    max_value=5,
+                    min_value=0, max_value=5,
                     value=int(st.session_state.asset_inventory.get(asset_key, default_value)),
-                    step=1,
-                    key=f"asset_{asset_key}",
+                    step=1, key=f"asset_{asset_key}",
                 )
 
         if st.button("Reset default assets"):
             st.session_state.asset_inventory = dict(DEFAULT_ASSET_INVENTORY)
             build_dashboard_data.clear()
             st.rerun()
-        if st.button("Refresh analysis cache"):
+        if st.button("Refresh analysis"):
             build_dashboard_data.clear()
             st.rerun()
 
     asset_inventory_items = tuple(sorted(
         (asset, int(count)) for asset, count in st.session_state.asset_inventory.items()
     ))
-    data = build_dashboard_data(asset_inventory_items)
+    data = build_dashboard_data(selected_scenario, asset_inventory_items)
     scenario = data["scenario"]
     events = data["events"]
     anomalies = data["anomalies"]
@@ -238,6 +301,7 @@ def main():
     briefing = data["briefing"]
     sims = data["sims"]
     asset_inventory = data["asset_inventory"]
+    data_source = data.get("source", "engine")
 
     with st.sidebar:
         st.divider()
@@ -249,19 +313,15 @@ def main():
             st.caption(
                 f"Feasibility {rec.recommended.coa.feasibility_score:.0%} with current assets"
             )
+        st.caption(f"Data source: {data_source}")
 
         st.divider()
         st.markdown("**Safety Boundary**")
         st.caption("Advisory decision support only. Synthetic data. No command execution.")
 
     tab_overview, tab_map, tab_timeline, tab_threat, tab_coa, tab_sim, tab_briefing = st.tabs([
-        "Scenario Overview",
-        "Map",
-        "Timeline",
-        "Threat Assessment",
-        "COA Ranking",
-        "Simulation Results",
-        "Commander Briefing",
+        "Scenario Overview", "Map", "Timeline", "Threat Assessment",
+        "COA Ranking", "Simulation Results", "Commander Briefing",
     ])
 
     # ---- Scenario Overview ----
@@ -279,7 +339,8 @@ def main():
 
         st.subheader("Selected Asset Inventory")
         asset_df = pd.DataFrame(
-            [{"Asset": ASSET_LABELS.get(asset, asset), "Available": count} for asset, count in asset_inventory.items()]
+            [{"Asset": ASSET_LABELS.get(asset, asset), "Available": count}
+             for asset, count in asset_inventory.items()]
         )
         st.dataframe(asset_df, use_container_width=True, hide_index=True)
 
@@ -299,22 +360,18 @@ def main():
 
     # ---- Map ----
     with tab_map:
-        st.header("Operational Map — Baltic Sea")
+        st.header(f"Operational Map — {scenario.name}")
         m = build_map(events, scenario)
         st_folium(m, width=1100, height=600)
 
         legend_cols = st.columns(5)
         labels = [
-            ("#d73027", "Suspicious Vessel"),
-            ("#4575b4", "Allied Vessel"),
-            ("#fdae61", "UAV"),
-            ("#7b3294", "Convoy"),
-            ("#1a9850", "Subsea Cable"),
+            ("#d73027", "Suspicious Vessel"), ("#4575b4", "Allied Vessel"),
+            ("#fdae61", "UAV"), ("#7b3294", "Convoy"), ("#1a9850", "Infrastructure"),
         ]
         for col, (color, label) in zip(legend_cols, labels):
             col.markdown(
-                f"<span style='color:{color}; font-size: 1.4rem;'>■</span> "
-                f"<b>{label}</b>",
+                f"<span style='color:{color}; font-size: 1.4rem;'>■</span> <b>{label}</b>",
                 unsafe_allow_html=True,
             )
 
@@ -346,11 +403,8 @@ def main():
             hoverinfo="text",
         ))
         fig.update_layout(
-            height=500,
-            xaxis_title="Time (UTC)",
-            yaxis_title="Entity",
-            margin=dict(l=20, r=20, t=30, b=30),
-            template="plotly_white",
+            height=500, xaxis_title="Time (UTC)", yaxis_title="Entity",
+            margin=dict(l=20, r=20, t=30, b=30), template="plotly_white",
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -380,8 +434,7 @@ def main():
 
             st.dataframe(
                 threat_df.style.map(_highlight_level, subset=["Level"]),
-                use_container_width=True,
-                hide_index=True,
+                use_container_width=True, hide_index=True,
             )
 
         st.subheader("Anomaly Indicators")
@@ -390,10 +443,8 @@ def main():
             anom_rows = []
             for a in sorted(high_anomalies, key=lambda x: x.anomaly_score, reverse=True)[:10]:
                 anom_rows.append({
-                    "Event": a.event_id,
-                    "Entity": a.entity_id,
-                    "Score": a.anomaly_score,
-                    "Level": a.anomaly_level.value,
+                    "Event": a.event_id, "Entity": a.entity_id,
+                    "Score": a.anomaly_score, "Level": a.anomaly_level.value,
                     "Indicators": "; ".join(a.explanations[:3]),
                 })
             st.dataframe(pd.DataFrame(anom_rows), use_container_width=True, hide_index=True)
@@ -416,7 +467,6 @@ def main():
 
         st.subheader("Scored COAs")
 
-        # Bar chart
         fig_coa = go.Figure()
         fig_coa.add_trace(go.Bar(
             x=[s.coa.title for s in scored],
@@ -426,21 +476,15 @@ def main():
             textposition="outside",
         ))
         fig_coa.update_layout(
-            yaxis=dict(range=[0, 100], title="Score"),
-            xaxis_title="Course of Action",
-            height=400,
-            template="plotly_white",
-            margin=dict(l=20, r=20, t=30, b=100),
+            yaxis=dict(range=[0, 100], title="Score"), xaxis_title="Course of Action",
+            height=400, template="plotly_white", margin=dict(l=20, r=20, t=30, b=100),
         )
         st.plotly_chart(fig_coa, use_container_width=True)
 
-        # Detail table
         coa_rows = []
         for s in scored:
             coa_rows.append({
-                "Rank": s.rank,
-                "COA": s.coa.title,
-                "Score": s.total_score,
+                "Rank": s.rank, "COA": s.coa.title, "Score": s.total_score,
                 "Feasibility": f"{s.coa.feasibility_score:.0%}",
                 "Success Prob": f"{s.simulation.success_probability:.1%}",
                 "Escalation": f"{s.simulation.escalation_probability:.1%}",
@@ -459,8 +503,7 @@ def main():
         st.header("Monte Carlo Simulation Results")
         st.caption(
             "Synthetic decision-support estimates based on "
-            f"{sims[0].simulation_runs if sims else 0} simulation runs per COA. "
-            "Not predictions."
+            f"{sims[0].simulation_runs if sims else 0} simulation runs per COA. Not predictions."
         )
 
         if sims:
@@ -478,9 +521,7 @@ def main():
             fig_sim.update_layout(
                 barmode="group",
                 yaxis=dict(range=[0, 1], tickformat=".0%", title="Probability"),
-                xaxis_title="COA",
-                height=450,
-                template="plotly_white",
+                xaxis_title="COA", height=450, template="plotly_white",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             )
             st.plotly_chart(fig_sim, use_container_width=True)
@@ -489,14 +530,12 @@ def main():
             for s in sims:
                 ci = s.confidence_interval
                 sim_rows.append({
-                    "COA": s.coa_id,
-                    "Success": f"{s.success_probability:.1%}",
+                    "COA": s.coa_id, "Success": f"{s.success_probability:.1%}",
                     "Time to Effect (min)": s.expected_time_to_effect,
                     "Cable Risk": f"{s.risk_to_second_cable:.1%}",
                     "Escalation": f"{s.escalation_probability:.1%}",
                     "Missed Det.": f"{s.missed_detection_probability:.1%}",
-                    "95% CI (Success)": f"[{ci[0]:.1%}, {ci[1]:.1%}]",
-                    "Runs": s.simulation_runs,
+                    "95% CI (Success)": f"[{ci[0]:.1%}, {ci[1]:.1%}]", "Runs": s.simulation_runs,
                 })
             st.dataframe(pd.DataFrame(sim_rows), use_container_width=True, hide_index=True)
 
@@ -514,6 +553,14 @@ def main():
 
         st.subheader("Assessment")
         st.markdown(briefing.assessment)
+        if briefing.enriched_assessment:
+            st.markdown("**Enriched Analysis:**")
+            st.markdown(briefing.enriched_assessment)
+
+        if briefing.entity_risk_narratives:
+            st.subheader("Entity Risk Narratives")
+            for eid, narrative in briefing.entity_risk_narratives.items():
+                st.markdown(f"**{eid}:** {narrative}")
 
         st.subheader("COAs Considered")
         for coa_name in briefing.coas_considered:
@@ -526,12 +573,32 @@ def main():
         for risk in briefing.risks:
             st.markdown(f"- {risk}")
 
-        col_conf, _ = st.columns([1, 3])
+        col_conf, col_export = st.columns([1, 3])
         col_conf.metric("Assessment Confidence", briefing.confidence)
 
         st.subheader("Assumptions")
         for assumption in briefing.assumptions:
             st.markdown(f"- {assumption}")
+
+        st.divider()
+
+        # Export buttons
+        st.subheader("Export Briefing")
+        col_json, col_pdf = st.columns(2)
+        with col_json:
+            if st.button("Export JSON"):
+                from app.engine.export import export_briefing_json
+                st.download_button(
+                    "Download JSON", export_briefing_json(briefing),
+                    file_name="briefing.json", mime="application/json",
+                )
+        with col_pdf:
+            if st.button("Export PDF"):
+                from app.engine.export import export_briefing_pdf
+                st.download_button(
+                    "Download PDF", export_briefing_pdf(briefing),
+                    file_name="briefing.pdf", mime="application/pdf",
+                )
 
         st.divider()
         st.caption("COA Engine — Synthetic decision-support prototype. All outputs are advisory.")

@@ -1,4 +1,3 @@
-from app.core.constants import EntityType, EventType
 from app.core.schemas import OperationalEvent
 from app.engine.anomaly_detection import detect_anomalies
 from app.engine.event_ingestion import load_scenario_events
@@ -71,7 +70,7 @@ def test_anomaly_results_match_event_count():
 
 
 def test_cable_severance_is_critical():
-    features, anomalies, _ = _run_pipeline()
+    _, anomalies, _ = _run_pipeline()
     e007 = next(a for a in anomalies if a.event_id == "E007")
     assert e007.anomaly_level == "CRITICAL"
     assert e007.anomaly_score >= 50.0
@@ -90,7 +89,7 @@ def test_anomaly_explanations_are_non_empty():
 
 
 def test_suspicious_vessel_events_have_elevated_anomaly():
-    features, anomalies, _ = _run_pipeline()
+    _, anomalies, _ = _run_pipeline()
     susp_anomalies = [a for a in anomalies if a.entity_id == "VES-SUSP-001"]
     max_score = max(a.anomaly_score for a in susp_anomalies)
     assert max_score >= 40.0
@@ -148,7 +147,7 @@ def test_threat_results_sorted_descending():
 
 
 def test_analysis_run_endpoint():
-    resp = client.post("/analysis/run", json={})
+    resp = client.post("/v1/analysis/run", json={})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -177,9 +176,17 @@ def test_analysis_run_with_custom_events():
         )
     ]
     payload = {"events": [e.model_dump(mode="json") for e in custom]}
-    resp = client.post("/analysis/run", json=payload)
+    resp = client.post("/v1/analysis/run", json=payload)
     assert resp.status_code == 200
     assert resp.json()["events_processed"] == 1
+
+
+def test_analysis_includes_tracks_and_temporal():
+    resp = client.post("/v1/analysis/run", json={})
+    body = resp.json()
+    assert "tracks" in body
+    assert "temporal" in body
+    assert len(body["tracks"]) > 0
 
 
 # --- Phase 1 tests still pass ---

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from ..core.constants import EntityType, EventType
 from ..core.schemas import CourseOfAction, OperationalEvent, ThreatResult
+
+logger = logging.getLogger("coa_engine.engine.coa_generation")
 
 
 def _has_cable_severance(events: list[OperationalEvent]) -> bool:
@@ -233,4 +237,7 @@ def generate_coas(
 
     required_assets = {asset for coa in coas for asset in coa.required_assets}
     normalized_inventory = _normalize_asset_inventory(asset_inventory, required_assets)
-    return [_apply_asset_feasibility(coa, normalized_inventory) for coa in coas]
+    result = [_apply_asset_feasibility(coa, normalized_inventory) for coa in coas]
+    logger.info("Generated %d rule-based COAs (cable=%s, uav=%s, convoy=%s)",
+                len(result), cable_severed, uav_threat, convoy_active)
+    return result

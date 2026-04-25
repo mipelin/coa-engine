@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .constants import AnomalyLevel, EntityType, EventType, ThreatLevel
+from .weights import ScenarioWeights
 
 
 class OperationalEvent(BaseModel):
@@ -37,6 +38,8 @@ class Scenario(BaseModel):
     critical_infrastructure: list[CriticalInfrastructure] = Field(default_factory=list)
     events: list[OperationalEvent] = Field(default_factory=list)
     entities: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    bounds: dict[str, float] | None = None
+    weights: ScenarioWeights | None = None
 
 
 class EventBatch(BaseModel):
@@ -117,6 +120,7 @@ class Recommendation(BaseModel):
     alternatives: list[ScoredCOA]
     rationale: str
     edge_cases: str
+    threat_narrative: str | None = None
 
 
 class Briefing(BaseModel):
@@ -128,14 +132,35 @@ class Briefing(BaseModel):
     risks: list[str]
     confidence: str
     assumptions: list[str]
+    enriched_assessment: str | None = None
+    entity_risk_narratives: dict[str, str] | None = None
 
 
 class AnalysisRequest(BaseModel):
     scenario_id: str | None = None
     events: list[OperationalEvent] | None = None
+    use_session: bool = True
     asset_inventory: dict[str, int] | None = None
 
 
 class HealthResponse(BaseModel):
     status: str
     version: str
+
+
+class TrackInfo(BaseModel):
+    entity_id: str
+    position_count: int
+    total_distance_km: float
+    avg_speed_knots: float | None
+    is_loitering: bool
+    velocity_bearing: float | None
+    velocity_speed: float | None
+
+
+class TemporalSummary(BaseModel):
+    event_rate_per_hour: float
+    escalation_rate: float
+    severity_trend: str
+    cluster_count: int
+    mean_inter_event_minutes: float | None = None
