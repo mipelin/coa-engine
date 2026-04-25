@@ -45,7 +45,8 @@ def test_build_dashboard_data_is_cached():
 
 def test_build_dashboard_data_accepts_asset_inventory():
     data = build_dashboard_data(
-        asset_inventory_items=(("isr_uav", 0), ("maritime_patrol_asset", 0)),
+        scenario_id="baltic_hybrid_001",
+        asset_inventory_items=(("isr_uav", 0), ("maritime_patrol_vessel", 0)),
     )
     assert data["asset_inventory"]["isr_uav"] == 0
     assert any(coa.feasibility_score < 1.0 for coa in data["coas"])

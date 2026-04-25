@@ -16,117 +16,161 @@ from app.core.schemas import (
     SimulationResult,
     ThreatResult,
 )
-
-# Import engine modules for direct fallback when API is unavailable
 from app.engine.anomaly_detection import detect_anomalies
 from app.engine.coa_generation import generate_coas
-from app.engine.event_ingestion import load_sample_scenario, load_scenario_events, list_scenarios
+from app.engine.event_ingestion import load_scenario, list_scenarios
 from app.engine.explanation import generate_briefing
 from app.engine.feature_engineering import compute_features
+from app.engine.llm_coa_generation import generate_coas_with_llm
+from app.engine.llm_narrative import enrich_briefing, enrich_threat_narrative, entity_risk_narrative
 from app.engine.recommendation import recommend
 from app.engine.scoring import score_coas
 from app.engine.simulation import run_simulations
 from app.engine.threat_assessment import assess_threats
 
-DEFAULT_ASSET_INVENTORY = {
-    "isr_uav": 2,
-    "satellite_observation_request": 1,
-    "sigint_team": 1,
-    "maritime_patrol_asset": 1,
-    "coast_guard_liaison": 1,
-    "cable_operator_liaison": 1,
-    "airspace_coordinator": 1,
-    "atc_liaison": 1,
-    "sensor_data_feed": 1,
-    "border_patrol_liaison": 1,
-    "intelligence_team": 1,
-    "surveillance_asset": 1,
-    "standard_watch_team": 1,
+# ---------------------------------------------------------------------------
+# Asset definitions — grouped by domain, with clear labels
+# ---------------------------------------------------------------------------
+
+ASSET_GROUPS = {
+    "Maritime": {
+        "maritime_patrol_vessel": ("Patrol Vessel", 1),
+        "coast_guard_cutter": ("Coast Guard Cutter", 1),
+        "submarine_sonar": ("Submarine / Sonar", 0),
+        "diver_team": ("Diver Team", 0),
+    },
+    "Air / ISR": {
+        "isr_uav": ("ISR UAV", 2),
+        "maritime_helicopter": ("Maritime Helicopter", 1),
+        "satellite_pass": ("Satellite Pass", 1),
+        "awacs_coverage": ("AWACS / AEW", 0),
+    },
+    "Intelligence": {
+        "sigint_team": ("SIGINT Team", 1),
+        "osint_cell": ("OSINT Cell", 1),
+        "intelligence_team": ("Intelligence Analysis Team", 1),
+    },
+    "Liaison / Coordination": {
+        "cable_operator_liaison": ("Cable Operator Link", 1),
+        "airspace_coordinator": ("Airspace Coordinator", 1),
+        "border_patrol_liaison": ("Border Patrol Link", 1),
+        "coast_guard_liaison": ("Coast Guard Link", 1),
+        "atc_liaison": ("ATC Liaison", 1),
+    },
 }
 
-ASSET_LABELS = {
-    "isr_uav": "ISR UAV",
-    "satellite_observation_request": "Satellite observation",
-    "sigint_team": "SIGINT team",
-    "maritime_patrol_asset": "Maritime patrol asset",
-    "coast_guard_liaison": "Coast guard liaison",
-    "cable_operator_liaison": "Cable operator liaison",
-    "airspace_coordinator": "Airspace coordinator",
-    "atc_liaison": "ATC liaison",
-    "sensor_data_feed": "Sensor data feed",
-    "border_patrol_liaison": "Border patrol liaison",
-    "intelligence_team": "Intelligence team",
-    "surveillance_asset": "Surveillance asset",
-    "standard_watch_team": "Standard watch team",
+# Flat lookup: asset_key -> label
+ASSET_LABELS: dict[str, str] = {}
+DEFAULT_ASSET_INVENTORY: dict[str, int] = {}
+for _group, _assets in ASSET_GROUPS.items():
+    for _key, (_label, _count) in _assets.items():
+        ASSET_LABELS[_key] = _label
+        DEFAULT_ASSET_INVENTORY[_key] = _count
+
+# Map asset keys to approximate deployment positions relative to scenario center
+# Used to show assets on the map
+ASSET_ICON_MAP = {
+    "maritime_patrol_vessel": ("blue", "anchor"),
+    "coast_guard_cutter": ("blue", "anchor"),
+    "submarine_sonar": ("darkblue", "anchor"),
+    "diver_team": ("darkblue", "anchor"),
+    "isr_uav": ("cadetblue", "plane"),
+    "maritime_helicopter": ("cadetblue", "plane"),
+    "satellite_pass": ("lightgray", "satellite"),
+    "awacs_coverage": ("lightgray", "satellite"),
+    "sigint_team": ("darkpurple", "signal"),
+    "osint_cell": ("darkpurple", "signal"),
+    "intelligence_team": ("darkpurple", "signal"),
+    "cable_operator_liaison": ("darkgreen", "star"),
+    "airspace_coordinator": ("orange", "info-sign"),
+    "border_patrol_liaison": ("gray", "info-sign"),
+    "coast_guard_liaison": ("blue", "info-sign"),
+    "atc_liaison": ("orange", "info-sign"),
+}
+
+ASSET_OFFSETS = {
+    "maritime_patrol_vessel": (-0.8, 0.5),
+    "coast_guard_cutter": (-0.5, -0.6),
+    "submarine_sonar": (0.3, -0.9),
+    "diver_team": (0.1, 0.8),
+    "isr_uav": (0.6, 0.3),
+    "maritime_helicopter": (-0.4, 0.7),
+    "satellite_pass": (0.0, 0.0),
+    "awacs_coverage": (-0.2, 0.9),
+    "sigint_team": (-0.6, -0.3),
+    "osint_cell": (0.7, -0.4),
+    "intelligence_team": (0.5, 0.6),
+    "cable_operator_liaison": (0.0, 0.0),
+    "airspace_coordinator": (0.9, 0.1),
+    "border_patrol_liaison": (-0.9, -0.1),
+    "coast_guard_liaison": (0.4, -0.7),
+    "atc_liaison": (0.8, 0.5),
 }
 
 
 # ---------------------------------------------------------------------------
-# Data preparation — uses API when available, falls back to direct engine
+# Data preparation — LLM-enhanced, scenario-aware
 # ---------------------------------------------------------------------------
 
 @st.cache_data
 def build_dashboard_data(
-    _scenario_id: str = "baltic_hybrid_001",
+    scenario_id: str = "baltic_hybrid_001",
     asset_inventory_items: tuple[tuple[str, int], ...] | None = None,
-    api_base_url: str = "http://localhost:8002",
 ) -> dict[str, Any]:
-    """Run the full analysis pipeline via API, falling back to direct engine."""
+    """Run the full analysis pipeline with LLM enrichment."""
     asset_inventory = dict(asset_inventory_items or tuple(DEFAULT_ASSET_INVENTORY.items()))
 
-    # Try API first
-    try:
-        from app.core.api_client import COAApiClient
-        client = COAApiClient(api_base_url)
-        client.health()  # connectivity check
-        client.load_scenario(_scenario_id)
+    # Load the correct scenario
+    scenario = load_scenario(scenario_id)
+    if not scenario.events:
+        raise ValueError(f"Scenario {scenario_id} has no events")
 
-        analysis = client.run_analysis({"asset_inventory": asset_inventory})
-        coa_data = client.generate_coas({"asset_inventory": asset_inventory})
-        sim_data = client.run_simulation({"asset_inventory": asset_inventory})
-        rec_data = client.run_recommendation({"asset_inventory": asset_inventory})
-        briefing_data = client.generate_briefing({"asset_inventory": asset_inventory})
-        events_data = client.list_events()
+    events = scenario.events
+    infrastructure = [ci.model_dump() for ci in scenario.critical_infrastructure] if scenario.critical_infrastructure else None
+    scenario_name = scenario.name
 
-        # Deserialize API responses into Pydantic models for rendering
-        events = [OperationalEvent.model_validate(e) for e in analysis.get("features", [])]
-        # Get events from the events endpoint
-        events = [OperationalEvent.model_validate(e) for e in events_data.get("events", analysis.get("events", []))]
-        anomalies = [AnomalyResult.model_validate(a) for a in analysis.get("anomalies", [])]
-        threats = [ThreatResult.model_validate(t) for t in analysis.get("threats", [])]
-        coas = [CourseOfAction.model_validate(c) for c in coa_data.get("coas", [])]
-        sims = [SimulationResult.model_validate(s) for s in sim_data.get("simulations", [])]
-        scored = [ScoredCOA.model_validate(s) for s in [rec_data.get("recommended")] + rec_data.get("alternatives", []) if s]
-        rec = Recommendation.model_validate(rec_data)
-        briefing = Briefing.model_validate(briefing_data)
-        scenario = load_sample_scenario()
-
-        client.close()
-        return {
-            "scenario": scenario, "events": events, "anomalies": anomalies,
-            "threats": threats, "coas": coas, "sims": sims,
-            "scored": scored, "recommendation": rec, "briefing": briefing,
-            "asset_inventory": asset_inventory, "source": "api",
-        }
-    except Exception:
-        pass
-
-    # Fallback: direct engine
-    scenario = load_sample_scenario()
-    events = load_scenario_events()
-    features = compute_features(events)
+    # Rule-based pipeline
+    features = compute_features(events, infrastructure)
     anomalies = detect_anomalies(events, features)
     threats = assess_threats(events, features, anomalies)
-    coas = generate_coas(events, threats, asset_inventory)
+
+    # LLM-enhanced COA generation (falls back to rule-based if LLM unavailable)
+    coas = generate_coas_with_llm(events, threats, asset_inventory)
+
     sims = run_simulations(coas, events, threats)
     scored = score_coas(coas, sims)
     rec = recommend(scored)
-    briefing = generate_briefing(events, anomalies, threats, scored, rec)
+
+    # LLM enrichment: threat narrative
+    threat_narrative = enrich_threat_narrative(threats, events)
+    if threat_narrative:
+        rec = rec.model_copy(update={"threat_narrative": threat_narrative})
+
+    # Base briefing from rules
+    briefing = generate_briefing(events, anomalies, threats, scored, rec, scenario_name)
+
+    # LLM enrichment: briefing
+    threat_ctx = threat_narrative or " ".join(
+        f"{t.entity_id}: {t.threat_probability:.0%}" for t in threats[:5]
+    )
+    enriched = enrich_briefing(briefing.assessment, threat_ctx)
+    if enriched:
+        briefing = briefing.model_copy(update={"enriched_assessment": enriched})
+
+    # LLM enrichment: entity risk narratives
+    entity_narratives: dict[str, str] = {}
+    for t in threats[:5]:
+        narrative = entity_risk_narrative(t.entity_id, t, events)
+        if narrative:
+            entity_narratives[t.entity_id] = narrative
+    if entity_narratives:
+        briefing = briefing.model_copy(update={"entity_risk_narratives": entity_narratives})
+
     return {
         "scenario": scenario, "events": events, "anomalies": anomalies,
         "threats": threats, "coas": coas, "sims": sims,
         "scored": scored, "recommendation": rec, "briefing": briefing,
-        "asset_inventory": asset_inventory, "source": "engine",
+        "asset_inventory": asset_inventory, "source": "engine+llm",
     }
 
 
@@ -134,29 +178,8 @@ def build_dashboard_data(
 # Color / icon helpers
 # ---------------------------------------------------------------------------
 
-ENTITY_COLORS = {
-    EntityType.SUSPICIOUS_VESSEL: "red",
-    EntityType.ALLIED_VESSEL: "blue",
-    EntityType.UAV: "orange",
-    EntityType.CONVOY: "purple",
-    EntityType.SUBSEA_CABLE: "darkgreen",
-    EntityType.ISR_ASSET: "cadetblue",
-    EntityType.AIRPORT: "gray",
-}
-
-EVENT_ICONS = {
-    EventType.CABLE_SEVERANCE: "bolt",
-    EventType.UAV_DETECTION: "plane",
-    EventType.JAMMING_DETECTED: "signal",
-    EventType.CONVOY_SIGHTING: "truck",
-    EventType.VESSEL_COURSE_CHANGE: "random",
-}
-
 THREAT_LEVEL_COLORS = {
-    "CRITICAL": "#ff0000",
-    "HIGH": "#ff6600",
-    "MEDIUM": "#ffcc00",
-    "LOW": "#33cc33",
+    "CRITICAL": "#ff0000", "HIGH": "#ff6600", "MEDIUM": "#ffcc00", "LOW": "#33cc33",
 }
 
 
@@ -179,14 +202,17 @@ def _threat_color(level: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Map builder
+# Map builder — now includes deployed assets
 # ---------------------------------------------------------------------------
 
-def build_map(events, scenario) -> Any:
+def build_map(events, scenario, asset_inventory: dict[str, int]) -> Any:
     import folium
 
-    # Center map on event centroid
-    if events:
+    # Center map on scenario infrastructure centroid
+    if scenario.critical_infrastructure:
+        avg_lat = sum(ci.lat for ci in scenario.critical_infrastructure) / len(scenario.critical_infrastructure)
+        avg_lon = sum(ci.lon for ci in scenario.critical_infrastructure) / len(scenario.critical_infrastructure)
+    elif events:
         avg_lat = sum(e.lat for e in events) / len(events)
         avg_lon = sum(e.lon for e in events) / len(events)
     else:
@@ -194,6 +220,7 @@ def build_map(events, scenario) -> Any:
 
     m = folium.Map(location=[avg_lat, avg_lon], zoom_start=5, tiles="CartoDB positron")
 
+    # Layer 1: Critical infrastructure
     for infra in scenario.critical_infrastructure:
         color = "darkgreen" if infra.type in ("subsea_cable", "pipeline") else "darkblue"
         folium.Marker(
@@ -201,6 +228,15 @@ def build_map(events, scenario) -> Any:
             popup=f"<b>{infra.name}</b><br>Type: {infra.type}",
             icon=folium.Icon(color=color, icon="star"),
         ).add_to(m)
+
+    # Layer 2: Threat events
+    EVENT_ICONS = {
+        EventType.CABLE_SEVERANCE: "bolt",
+        EventType.UAV_DETECTION: "plane",
+        EventType.JAMMING_DETECTED: "signal",
+        EventType.CONVOY_SIGHTING: "truck",
+        EventType.VESSEL_COURSE_CHANGE: "random",
+    }
 
     seen_positions: set[str] = set()
     for ev in events:
@@ -223,6 +259,7 @@ def build_map(events, scenario) -> Any:
             icon=folium.Icon(color=color, icon=icon, prefix="fa"),
         ).add_to(m)
 
+    # Layer 3: Jamming circles
     for ev in events:
         if ev.event_type == EventType.JAMMING_DETECTED:
             radius_km = ev.attributes.get("radius_nm", 20) * 1.852
@@ -232,6 +269,50 @@ def build_map(events, scenario) -> Any:
                 color="purple", fill=True, fill_opacity=0.08,
                 popup=f"Jamming radius: {ev.attributes.get('radius_nm', 20)} nm",
             ).add_to(m)
+
+    # Layer 4: Deployed assets — show available assets around the AO
+    deployed_count = 0
+    for asset_key, count in asset_inventory.items():
+        if count <= 0:
+            continue
+        if asset_key not in ASSET_OFFSETS:
+            continue
+        label = ASSET_LABELS.get(asset_key, asset_key)
+        icon_color, icon_name = ASSET_ICON_MAP.get(asset_key, ("white", "info-sign"))
+        offset_lat, offset_lon = ASSET_OFFSETS[asset_key]
+
+        # Position asset offset from the center
+        a_lat = avg_lat + offset_lat * 1.5
+        a_lon = avg_lon + offset_lon * 1.5
+
+        popup = f"<b>{label}</b><br>Qty: {count}<br>Status: Available"
+        folium.Marker(
+            location=[a_lat, a_lon],
+            popup=popup,
+            icon=folium.Icon(color=icon_color, icon=icon_name, prefix="fa"),
+        ).add_to(m)
+        deployed_count += 1
+
+    # Layer 5: Asset coverage circles for key assets
+    coverage_assets = {
+        "isr_uav": 100,          # km radius
+        "awacs_coverage": 300,
+        "maritime_helicopter": 150,
+        "sigint_team": 80,
+    }
+    for asset_key, radius_km in coverage_assets.items():
+        count = asset_inventory.get(asset_key, 0)
+        if count <= 0 or asset_key not in ASSET_OFFSETS:
+            continue
+        offset_lat, offset_lon = ASSET_OFFSETS[asset_key]
+        a_lat = avg_lat + offset_lat * 1.5
+        a_lon = avg_lon + offset_lon * 1.5
+        folium.Circle(
+            location=[a_lat, a_lon],
+            radius=radius_km * 1000,
+            color="cadetblue", fill=True, fill_opacity=0.04,
+            popup=f"{ASSET_LABELS[asset_key]} coverage: ~{radius_km} km",
+        ).add_to(m)
 
     return m
 
@@ -255,9 +336,10 @@ def main():
     if "asset_inventory" not in st.session_state:
         st.session_state.asset_inventory = dict(DEFAULT_ASSET_INVENTORY)
 
+    # ---- Sidebar ----
     with st.sidebar:
-        st.header("Scenario Controls")
-        st.caption("Select scenario and adjust assets. No live feeds.")
+        st.header("Scenario & Assets")
+        st.caption("Select scenario and adjust available forces.")
 
         scenario_list = list_scenarios()
         scenario_options = {s["scenario_id"]: s["name"] for s in scenario_list}
@@ -270,24 +352,30 @@ def main():
             index=0,
         )
 
-        st.markdown("**Assets For Simulation**")
-        with st.expander("Adjust available assets", expanded=True):
-            for asset_key, default_value in DEFAULT_ASSET_INVENTORY.items():
+        st.divider()
+        st.markdown("**Available Forces**")
+        for group_name, assets in ASSET_GROUPS.items():
+            st.markdown(f"<small><b>{group_name}</b></small>", unsafe_allow_html=True)
+            for asset_key, (label, default) in assets.items():
                 st.session_state.asset_inventory[asset_key] = st.number_input(
-                    ASSET_LABELS[asset_key],
-                    min_value=0, max_value=5,
-                    value=int(st.session_state.asset_inventory.get(asset_key, default_value)),
+                    label,
+                    min_value=0, max_value=10,
+                    value=int(st.session_state.asset_inventory.get(asset_key, default)),
                     step=1, key=f"asset_{asset_key}",
                 )
 
-        if st.button("Reset default assets"):
-            st.session_state.asset_inventory = dict(DEFAULT_ASSET_INVENTORY)
-            build_dashboard_data.clear()
-            st.rerun()
-        if st.button("Refresh analysis"):
-            build_dashboard_data.clear()
-            st.rerun()
+        col_reset, col_run = st.columns(2)
+        with col_reset:
+            if st.button("Reset"):
+                st.session_state.asset_inventory = dict(DEFAULT_ASSET_INVENTORY)
+                build_dashboard_data.clear()
+                st.rerun()
+        with col_run:
+            if st.button("Re-analyze"):
+                build_dashboard_data.clear()
+                st.rerun()
 
+    # ---- Run pipeline ----
     asset_inventory_items = tuple(sorted(
         (asset, int(count)) for asset, count in st.session_state.asset_inventory.items()
     ))
@@ -313,18 +401,18 @@ def main():
             st.caption(
                 f"Feasibility {rec.recommended.coa.feasibility_score:.0%} with current assets"
             )
-        st.caption(f"Data source: {data_source}")
-
+        st.caption(f"Source: {data_source}")
         st.divider()
         st.markdown("**Safety Boundary**")
-        st.caption("Advisory decision support only. Synthetic data. No command execution.")
+        st.caption("Advisory only. Synthetic data. No command execution.")
 
+    # ---- Tabs ----
     tab_overview, tab_map, tab_timeline, tab_threat, tab_coa, tab_sim, tab_briefing = st.tabs([
-        "Scenario Overview", "Map", "Timeline", "Threat Assessment",
-        "COA Ranking", "Simulation Results", "Commander Briefing",
+        "Overview", "Map", "Timeline", "Threat Assessment",
+        "COA Ranking", "Simulation", "Commander Briefing",
     ])
 
-    # ---- Scenario Overview ----
+    # ---- Overview ----
     with tab_overview:
         st.header("Scenario Overview")
         st.markdown(f"**{scenario.name}**")
@@ -337,39 +425,40 @@ def main():
         col3.metric("Critical Infrastructure", len(scenario.critical_infrastructure))
         col4.metric("COAs Generated", len(scored))
 
-        st.subheader("Selected Asset Inventory")
-        asset_df = pd.DataFrame(
-            [{"Asset": ASSET_LABELS.get(asset, asset), "Available": count}
-             for asset, count in asset_inventory.items()]
-        )
-        st.dataframe(asset_df, use_container_width=True, hide_index=True)
+        # Asset summary
+        total_deployed = sum(1 for v in asset_inventory.values() if v > 0)
+        st.subheader(f"Deployed Forces ({total_deployed} asset types available)")
+        asset_rows = []
+        for group_name, assets in ASSET_GROUPS.items():
+            for asset_key, (label, _) in assets.items():
+                count = asset_inventory.get(asset_key, 0)
+                status = "Available" if count > 0 else "Unavailable"
+                asset_rows.append({"Group": group_name, "Asset": label, "Qty": count, "Status": status})
+        st.dataframe(pd.DataFrame(asset_rows), use_container_width=True, hide_index=True)
 
         st.divider()
-
         type_counts: dict[str, int] = {}
         for e in events:
             label = e.event_type.value
             type_counts[label] = type_counts.get(label, 0) + 1
         st.subheader("Event Type Distribution")
-        type_df = pd.DataFrame(
-            [{"Event Type": k, "Count": v} for k, v in sorted(type_counts.items())]
-        )
+        type_df = pd.DataFrame([{"Event Type": k, "Count": v} for k, v in sorted(type_counts.items())])
         st.bar_chart(type_df, x="Event Type", y="Count")
-
         st.info("All data is synthetic and for prototype demonstration only.")
 
     # ---- Map ----
     with tab_map:
         st.header(f"Operational Map — {scenario.name}")
-        m = build_map(events, scenario)
+        m = build_map(events, scenario, asset_inventory)
         st_folium(m, width=1100, height=600)
 
-        legend_cols = st.columns(5)
-        labels = [
-            ("#d73027", "Suspicious Vessel"), ("#4575b4", "Allied Vessel"),
-            ("#fdae61", "UAV"), ("#7b3294", "Convoy"), ("#1a9850", "Infrastructure"),
+        legend_cols = st.columns(6)
+        legend_items = [
+            ("#d73027", "Hostile"), ("#4575b4", "Allied/Asset"),
+            ("#fdae61", "UAV"), ("#7b3294", "Convoy"),
+            ("#1a9850", "Infrastructure"), ("#cadetblue", "ISR Coverage"),
         ]
-        for col, (color, label) in zip(legend_cols, labels):
+        for col, (color, label) in zip(legend_cols, legend_items):
             col.markdown(
                 f"<span style='color:{color}; font-size: 1.4rem;'>■</span> <b>{label}</b>",
                 unsafe_allow_html=True,
@@ -387,7 +476,7 @@ def main():
                 "Confidence": e.confidence,
                 "Description": e.description[:90],
             })
-        df = pd.DataFrame(rows)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(
@@ -408,9 +497,6 @@ def main():
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        st.subheader("Event Details")
-        st.dataframe(df, use_container_width=True, hide_index=True)
-
     # ---- Threat Assessment ----
     with tab_threat:
         st.header("Threat Assessment")
@@ -428,14 +514,14 @@ def main():
                 })
             threat_df = pd.DataFrame(threat_rows)
 
-            def _highlight_level(val):
-                color = _threat_color(val)
-                return f"background-color: {color}; color: white; font-weight: bold"
+            def _hl(val):
+                return f"background-color: {_threat_color(val)}; color: white; font-weight: bold"
 
-            st.dataframe(
-                threat_df.style.map(_highlight_level, subset=["Level"]),
-                use_container_width=True, hide_index=True,
-            )
+            st.dataframe(threat_df.style.map(_hl, subset=["Level"]), use_container_width=True, hide_index=True)
+
+        if rec.threat_narrative:
+            st.subheader("Threat Narrative (LLM-Enriched)")
+            st.markdown(rec.threat_narrative)
 
         st.subheader("Anomaly Indicators")
         high_anomalies = [a for a in anomalies if a.anomaly_score >= 40]
@@ -466,7 +552,6 @@ def main():
             st.markdown(f"**Rationale:** {rec.rationale}")
 
         st.subheader("Scored COAs")
-
         fig_coa = go.Figure()
         fig_coa.add_trace(go.Bar(
             x=[s.coa.title for s in scored],
@@ -486,33 +571,27 @@ def main():
             coa_rows.append({
                 "Rank": s.rank, "COA": s.coa.title, "Score": s.total_score,
                 "Feasibility": f"{s.coa.feasibility_score:.0%}",
-                "Success Prob": f"{s.simulation.success_probability:.1%}",
+                "Success": f"{s.simulation.success_probability:.1%}",
                 "Escalation": f"{s.simulation.escalation_probability:.1%}",
-                "Cable Risk": f"{s.simulation.risk_to_second_cable:.1%}",
-                "Missed Det.": f"{s.simulation.missed_detection_probability:.1%}",
-                "Missing Assets": ", ".join(s.coa.missing_assets) or "None",
+                "Missing": ", ".join(s.coa.missing_assets) or "None",
                 "Trade-offs": s.tradeoff_explanation,
             })
         st.dataframe(pd.DataFrame(coa_rows), use_container_width=True, hide_index=True)
-
         if rec.edge_cases:
             st.info(f"**When alternatives may be preferred:** {rec.edge_cases}")
 
-    # ---- Simulation Results ----
+    # ---- Simulation ----
     with tab_sim:
         st.header("Monte Carlo Simulation Results")
         st.caption(
-            "Synthetic decision-support estimates based on "
-            f"{sims[0].simulation_runs if sims else 0} simulation runs per COA. Not predictions."
+            f"Based on {sims[0].simulation_runs if sims else 0} runs per COA. Not predictions."
         )
-
         if sims:
             sim_labels = [s.coa_id for s in sims]
-
             fig_sim = go.Figure()
-            fig_sim.add_trace(go.Bar(name="Success Prob.", x=sim_labels,
+            fig_sim.add_trace(go.Bar(name="Success", x=sim_labels,
                                      y=[s.success_probability for s in sims], marker_color="#2e8b57"))
-            fig_sim.add_trace(go.Bar(name="Escalation Prob.", x=sim_labels,
+            fig_sim.add_trace(go.Bar(name="Escalation", x=sim_labels,
                                      y=[s.escalation_probability for s in sims], marker_color="#ff6600"))
             fig_sim.add_trace(go.Bar(name="Cable Risk", x=sim_labels,
                                      y=[s.risk_to_second_cable for s in sims], marker_color="#cc0000"))
@@ -525,17 +604,15 @@ def main():
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             )
             st.plotly_chart(fig_sim, use_container_width=True)
-
             sim_rows = []
             for s in sims:
                 ci = s.confidence_interval
                 sim_rows.append({
                     "COA": s.coa_id, "Success": f"{s.success_probability:.1%}",
-                    "Time to Effect (min)": s.expected_time_to_effect,
+                    "Time (min)": s.expected_time_to_effect,
                     "Cable Risk": f"{s.risk_to_second_cable:.1%}",
                     "Escalation": f"{s.escalation_probability:.1%}",
-                    "Missed Det.": f"{s.missed_detection_probability:.1%}",
-                    "95% CI (Success)": f"[{ci[0]:.1%}, {ci[1]:.1%}]", "Runs": s.simulation_runs,
+                    "95% CI": f"[{ci[0]:.1%}, {ci[1]:.1%}]",
                 })
             st.dataframe(pd.DataFrame(sim_rows), use_container_width=True, hide_index=True)
 
@@ -554,11 +631,11 @@ def main():
         st.subheader("Assessment")
         st.markdown(briefing.assessment)
         if briefing.enriched_assessment:
-            st.markdown("**Enriched Analysis:**")
-            st.markdown(briefing.enriched_assessment)
+            st.markdown("**Enriched Analysis (LLM):**")
+            st.info(briefing.enriched_assessment)
 
         if briefing.entity_risk_narratives:
-            st.subheader("Entity Risk Narratives")
+            st.subheader("Entity Risk Narratives (LLM)")
             for eid, narrative in briefing.entity_risk_narratives.items():
                 st.markdown(f"**{eid}:** {narrative}")
 
@@ -573,32 +650,26 @@ def main():
         for risk in briefing.risks:
             st.markdown(f"- {risk}")
 
-        col_conf, col_export = st.columns([1, 3])
-        col_conf.metric("Assessment Confidence", briefing.confidence)
+        st.metric("Assessment Confidence", briefing.confidence)
 
         st.subheader("Assumptions")
         for assumption in briefing.assumptions:
             st.markdown(f"- {assumption}")
 
         st.divider()
-
-        # Export buttons
         st.subheader("Export Briefing")
+        from app.engine.export import export_briefing_json, export_briefing_pdf
         col_json, col_pdf = st.columns(2)
         with col_json:
-            if st.button("Export JSON"):
-                from app.engine.export import export_briefing_json
-                st.download_button(
-                    "Download JSON", export_briefing_json(briefing),
-                    file_name="briefing.json", mime="application/json",
-                )
+            st.download_button(
+                "Download JSON", export_briefing_json(briefing),
+                file_name=f"briefing_{selected_scenario}.json", mime="application/json",
+            )
         with col_pdf:
-            if st.button("Export PDF"):
-                from app.engine.export import export_briefing_pdf
-                st.download_button(
-                    "Download PDF", export_briefing_pdf(briefing),
-                    file_name="briefing.pdf", mime="application/pdf",
-                )
+            st.download_button(
+                "Download PDF", export_briefing_pdf(briefing),
+                file_name=f"briefing_{selected_scenario}.pdf", mime="application/pdf",
+            )
 
         st.divider()
         st.caption("COA Engine — Synthetic decision-support prototype. All outputs are advisory.")
