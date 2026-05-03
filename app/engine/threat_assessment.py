@@ -4,17 +4,17 @@ import logging
 from collections import defaultdict
 
 from ..core.config import settings
-from ..core.constants import EntityType, EventType, ThreatLevel
+from ..core.constants import BEHAVIOR_WEIGHTS, EntityType, EventType, ThreatLevel
 from ..core.schemas import AnomalyResult, FeatureVector, OperationalEvent, ThreatResult
+from .behavior_features import BehaviorFeatures, extract_behavior_features
 
 logger = logging.getLogger("coa_engine.engine.threat_assessment")
 
 EXCLUDE_FROM_THREAT_RANKING = {
     EntityType.ALLIED_VESSEL,
     EntityType.ISR_ASSET,
-    EntityType.SUBSEA_CABLE,
-    EntityType.AIRPORT,
-    EntityType.BORDER_CROSSING,
+    EntityType.INFRASTRUCTURE,
+    EntityType.NEUTRAL_VESSEL,
 }
 
 EVENT_TYPE_WEIGHTS: dict[str, float] = {
@@ -57,6 +57,8 @@ def assess_threats(
     entity_events: dict[str, list[OperationalEvent]] = defaultdict(list)
     for e in events:
         entity_events[e.entity_id].append(e)
+
+    entity_behavior = extract_behavior_features(events)
 
     has_cable_severance = any(e.event_type == EventType.CABLE_SEVERANCE for e in events)
 
@@ -108,13 +110,25 @@ def assess_threats(
             if min_dist < 10.0:
                 probability += settings.threat_cable_severance_vessel_boost
 
+        # Hostile electronic warfare: entities that ARE jamming sources get a direct boost
+        has_jamming_event = any(e.event_type == EventType.JAMMING_DETECTED for e in ent_events)
+        if has_jamming_event:
+            probability += settings.threat_jamming_entity_boost
+
         if primary_type == EntityType.UAV:
             probability += settings.threat_uav_heading_boost * avg_heading
 
         probability += avg_convoy * settings.threat_weight_convoy
-        probability = min(max(probability, 0.0), 1.0)
 
-        level = _classify_threat(probability)
+        # Allied deterrence: nearby friendly forces reduce threat
+        avg_allied = (
+            sum(f.allied_proximity_score for f in feats) / len(feats)
+            if feats else 0.0
+        )
+        if avg_allied > 0.1:
+            probability -= avg_allied * settings.allied_deterrence_factor
+
+        # Note: final clamp and level classification is after behavior-intent modifiers
 
         source_confs = [e.confidence for e in ent_events]
         avg_confidence = sum(source_confs) / len(source_confs)
@@ -135,6 +149,44 @@ def assess_threats(
             drivers.append("Context: confirmed cable severance in scenario area")
         if avg_convoy > 0.3:
             drivers.append("Correlated with convoy activity")
+        if has_jamming_event:
+            drivers.append("Confirmed jamming activity in area")
+        if avg_allied > 0.3:
+            drivers.append(f"Allied deterrence effect (proximity score: {avg_allied:.0%})")
+
+        # Behavior-intent boosts (driven by BEHAVIOR_WEIGHTS config)
+        bf = entity_behavior.get(entity_id, BehaviorFeatures())
+
+        for mode in bf.behavior_modes:
+            if mode not in BEHAVIOR_WEIGHTS:
+                continue
+            bw = BEHAVIOR_WEIGHTS[mode]
+
+            # Additive threat boost
+            if "threat_add" in bw:
+                required_intent = bw.get("anomaly_condition_intent")
+                condition_ok = True
+                if required_intent and required_intent not in bf.intents:
+                    condition_ok = False
+                if mode == "hostile_probe_infrastructure" and not bf.targets:
+                    condition_ok = False
+                if condition_ok:
+                    probability += bw["threat_add"]
+                    drivers.append(
+                        bw["explanation_threat"].format(targets=", ".join(bf.targets))
+                    )
+
+            # Threat reduction
+            if "threat_subtract" in bw:
+                probability -= bw["threat_subtract"]
+                if "No strong threat indicators identified" in drivers:
+                    drivers.remove("No strong threat indicators identified")
+                drivers.append(bw["explanation_threat"])
+
+        # Clamp after behavior modifiers
+        probability = min(max(probability, 0.0), 1.0)
+        level = _classify_threat(probability)
+
         if n_sources >= 3:
             drivers.append(f"Confirmed by {n_sources} independent sources")
         if not drivers:

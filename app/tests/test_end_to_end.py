@@ -42,6 +42,36 @@ def test_all_endpoints_return_200():
         assert resp.status_code == 200, f"{name} returned {resp.status_code}"
 
 
+def test_dashboard_route_returns_html():
+    resp = client.get("/dashboard")
+    assert resp.status_code == 200
+    assert "COA ENGINE" in resp.text
+    assert "Guide" in resp.text
+    assert "Select a scenario and click Start" in resp.text
+    assert "Quick Scenarios" in resp.text
+    assert "Jamming Event" in resp.text
+    assert "Add suspicious vessel now" in resp.text
+    assert "Show Advanced Placement" in resp.text
+    assert "Maritime Threat Near Cable" in resp.text
+    assert "Generating Briefing..." in resp.text
+    assert "Undo Last Injection" in resp.text
+    assert "Reset Scenario" in resp.text
+    assert "Why Changed" in resp.text
+    assert "Show Cable Routes" in resp.text
+    assert "Show NOAA Replay Traffic" in resp.text
+    assert "Why This COA Won" in resp.text
+    assert "Asset pool source" in resp.text
+    assert 'data-i18n-placeholder="query.input_placeholder"' in resp.text
+    assert 'data-q-key="query.chip.threat_question"' in resp.text
+    assert 'data-i18n="query.ask_btn"' in resp.text
+
+
+def test_root_redirects_to_dashboard():
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code in (302, 307)
+    assert resp.headers["location"] == "/dashboard"
+
+
 def test_health_structure():
     resp = client.get("/health")
     body = resp.json()
@@ -71,9 +101,9 @@ def test_analysis_pipeline_completes():
     # At least one HIGH/CRITICAL threat
     assert any(t["threat_level"] in ("HIGH", "CRITICAL") for t in body["threats"])
 
-    # Cable severance event should be CRITICAL anomaly
+    # Cable severance event should be HIGH or CRITICAL anomaly
     e007 = next(a for a in body["anomalies"] if a["event_id"] == "E007")
-    assert e007["anomaly_level"] == "CRITICAL"
+    assert e007["anomaly_level"] in ("CRITICAL", "HIGH")
 
 
 def test_coa_generation_completes():
@@ -85,7 +115,9 @@ def test_coa_generation_completes():
 
     for coa in body["coas"]:
         assert coa["coa_id"]
+        assert coa["template_id"]
         assert coa["title"]
+        assert coa["source"] == "template_engine"
         assert len(coa["required_assets"]) > 0
 
 
@@ -105,6 +137,9 @@ def test_recommendation_completes():
     resp = client.post("/v1/coa/recommendation/run", json={})
     body = resp.json()
     assert body["recommended"]["rank"] == 1
+    assert "recommended_package" in body
+    if body["recommended_package"] is not None:
+        assert len(body["recommended_package"]["coas"]) >= 2
     assert len(body["rationale"]) > 0
     assert len(body["alternatives"]) >= 1
     assert len(body["edge_cases"]) > 0

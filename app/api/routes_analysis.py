@@ -4,11 +4,8 @@ from fastapi import APIRouter
 
 from ..core.session import get_session
 from ..core.schemas import AnalysisRequest
-from ..engine.anomaly_detection import detect_anomalies
-from ..engine.entity_tracking import build_tracks
-from ..engine.feature_engineering import compute_features
-from ..engine.threat_assessment import assess_threats
-from ..engine.time_series import analyze_temporal_patterns
+from ..engine.analysis_service import AnalysisContext, run_canonical_analysis
+from ..engine.state_store import get_state_store
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -42,22 +39,42 @@ async def run_analysis(request: AnalysisRequest):
     """Run full analysis pipeline: features, anomalies, threats, tracks, temporal."""
     events = _get_events(request)
     infrastructure = _get_infrastructure(request)
-    features = compute_features(events, infrastructure)
-    anomalies = detect_anomalies(events, features)
-    threats = assess_threats(events, features, anomalies)
-    tracks = build_tracks(events)
-    temporal = analyze_temporal_patterns(events)
+    session = get_session()
+    scenario = session.get_scenario()
+    store = get_state_store()
+    result = run_canonical_analysis(
+        AnalysisContext(
+            events=events,
+            infrastructure=infrastructure,
+            scenario_state=store.state.scenario,
+            asset_inventory=store.get_asset_inventory() or None,
+            asset_states=store.get_asset_states() or None,
+            active_contacts=store.get_contacts() or None,
+            source="legacy_session_analysis",
+            tick=store.get_tick(),
+            scenario_id=scenario.scenario_id if scenario else store.state.scenario.scenario_id,
+            scenario_name=scenario.name if scenario else store.state.scenario.scenario_name,
+        ),
+        include_tracks=True,
+        include_temporal=True,
+    )
 
     logger.info("Analysis run: %d events, %d threats, %d tracks",
-                len(events), len(threats), len(tracks))
+                len(events), len(result.threats), len(result.tracks))
 
     return {
         "status": "ok",
+        "pipeline": "canonical",
         "events_processed": len(events),
-        "features_computed": len(features),
-        "features": [f.model_dump(mode="json") for f in features],
-        "anomalies": [a.model_dump(mode="json") for a in anomalies],
-        "threats": [t.model_dump(mode="json") for t in threats],
-        "tracks": {eid: t.model_dump(mode="json") for eid, t in tracks.items()},
-        "temporal": temporal.model_dump(mode="json"),
+        "features_computed": len(result.features),
+        "features": [f.model_dump(mode="json") for f in result.features],
+        "anomalies": [a.model_dump(mode="json") for a in result.anomalies],
+        "threats": [t.model_dump(mode="json") for t in result.threats],
+        "tracks": {eid: t.model_dump(mode="json") for eid, t in result.tracks.items()},
+        "temporal": result.temporal.model_dump(mode="json") if result.temporal else None,
+        "coas": [c.model_dump(mode="json") for c in result.coas],
+        "simulations": [s.model_dump(mode="json") for s in result.simulations],
+        "scored_coas": [s.model_dump(mode="json") for s in result.scored_coas],
+        "recommendation": result.recommendation.model_dump(mode="json") if result.recommendation else None,
+        "metadata": result.metadata,
     }

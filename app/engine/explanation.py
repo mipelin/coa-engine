@@ -23,6 +23,7 @@ def generate_briefing(
     scored: list[ScoredCOA],
     recommendation: Recommendation,
     scenario_name: str = "Operational Area",
+    language: str = "en",
 ) -> Briefing:
     """Generate a commander-style decision-support briefing."""
     if not events:
@@ -35,6 +36,7 @@ def generate_briefing(
             risks=["No data"],
             confidence="LOW",
             assumptions=["No events provided"],
+            language=language,
         )
 
     sorted_events = sorted(events, key=lambda e: e.timestamp)
@@ -107,7 +109,15 @@ def generate_briefing(
 
     # Recommended COA
     rec_text = "None"
-    if recommendation.recommended:
+    if recommendation.recommended_package:
+        package = recommendation.recommended_package
+        lead_titles = ", ".join(item.coa.title for item in package.coas)
+        rec_text = (
+            f"Recommended package {package.package_id}: {lead_titles} "
+            f"(package score {package.total_score:.1f}/100, feasibility {package.feasibility_score:.0%}). "
+            f"{recommendation.rationale}"
+        )
+    elif recommendation.recommended:
         r = recommendation.recommended
         rec_text = (
             f"{r.coa.title} (score {r.total_score:.1f}/100, "
@@ -162,10 +172,19 @@ def generate_briefing(
     return Briefing(
         situation=situation,
         key_indicators=indicators,
+        recent_developments=indicators[:4],
         assessment=assessment,
+        key_actors=[
+            *(f"Hostile / suspicious: {t.entity_id}" for t in top_threats[:2]),
+            "Friendly assets and infrastructure remain under observation",
+        ],
         coas_considered=coa_titles,
         recommended_coa=rec_text,
+        roe_status=(
+            recommendation.recommended.coa.roe_status if recommendation.recommended else None
+        ),
         risks=risks,
         confidence=confidence,
         assumptions=assumptions,
+        language=language,
     )

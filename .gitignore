@@ -1,15 +1,68 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
+*.pyd
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
 .venv/
 venv/
-*.egg-info/
+env/
+ENV/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Databases / local state
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+
+# Node / frontend build
+node_modules/
 dist/
 build/
+.cache/
+
+# OS / editor
 .DS_Store
-.streamlit/
-.env
-*.env
-*.pdf
-*.egg
+Thumbs.db
+.vscode/
+.idea/
+
+# LLM / model files
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.pth
+models/
+
+# Large/raw data
+data/raw/
+data/cache/
+downloads/
+
+# Docker / temp
+*.pid
+tmp/
+temp/
+
+# Project runtime artifacts
+run_outputs/
+outputs/
+artifacts/
+.openclaude-profile.json

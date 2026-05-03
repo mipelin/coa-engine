@@ -1,0 +1,2604 @@
+const state = {
+  socket: null,
+  running: false,
+  activeTab: 'contacts',
+  map: null,
+  mapLayer: null,
+  cableLayers: [],
+  markers: new Map(),
+  aisMarkers: new Map(),
+  flashTimer: null,
+  scenario: 'baltic_hybrid_001',
+  tick: 0,
+  contacts: [],
+  tracks: {},
+  coas: [],
+  recommendation: null,
+  assets: [],
+  aisContacts: [],
+  briefing: null,
+  briefingBusy: false,
+  anomalies: [],
+  threats: [],
+  lastWhyChanged: 'No major change yet. Start the engine or inject a meaningful event.',
+  expandedCoaId: null,
+  mapPlacement: null,
+  simMode: false,
+  simAdvanced: false,
+  mapInteractionMode: null,
+  selectedEntityId: null,
+  selectedContactSource: 'simulation',
+  simDraft: {name: 'New Unit', type: 'vessel', ally: 'hostile', speed: '8', heading: '0', lat: '', lon: '', radius_nm: '20', ais_off: 'false'},
+  simStatus: null,
+  simulatorNotes: {},
+  editOpenFor: null,
+  editDrafts: {},
+  actionOpenFor: null,
+  actionDrafts: {},
+  scheduledActions: {},
+  injectedStack: [],
+  showCableRoutes: true,
+  show_ais: false,
+  show_combat_contacts: true,
+  show_sim_entities: true,
+  showAis: false,
+  lastAnalysisLogKey: null,
+  filters: {friendly: true, hostile: true, neutral: true, air: true, naval: true, land: true, infra: true},
+  uiLanguage: 'en',
+  uiTranslations: {},
+  uiTranslationCache: {en: {}},
+  sourceUiStrings: null,
+  briefingLanguage: 'en',
+  llmStatus: {busy: false, queue_length: 0, current_task_type: null, last_error: null},
+  latestEventSummary: null,
+};
+
+const UI_TEXT = {
+  'common.none': 'None.',
+  'common.none_short': 'None',
+  'common.no': 'No',
+  'common.yes': 'Yes',
+  'status.connected': 'Connected',
+  'status.disconnected': 'Disconnected',
+  'status.stopped': 'Stopped',
+  'status.socket_error': 'Socket Error',
+  'tick.label': 'Tick',
+  'contacts.empty': 'No contacts',
+  'coas.empty': 'Awaiting analysis',
+  'briefing.empty': 'Click Generate Briefing to produce commander assessment',
+  'briefing.generating': 'Generating Briefing...',
+  'briefing.generate': 'Generate Briefing',
+  'briefing.downloaded': 'Briefing PDF downloaded',
+  'briefing.commander_summary': 'Commander Summary',
+  'briefing.primary_recommendation': 'Primary recommended course of action based on the latest operational picture.',
+  'briefing.assessment_confidence': 'Assessment Confidence',
+  'briefing.coas_considered_count': 'COAs Considered',
+  'briefing.situation': 'Situation',
+  'briefing.recent_developments': 'Recent Developments',
+  'briefing.key_indicators': 'Key Indicators',
+  'briefing.assessment': 'Assessment',
+  'briefing.key_actors': 'Key Actors',
+  'briefing.recommended_coa': 'Recommended Course of Action',
+  'briefing.roe_status': 'ROE Status',
+  'briefing.risks_next': 'Risks And Next Developments',
+  'briefing.enriched_assessment': 'LLM Enriched Assessment',
+  'briefing.risks': 'Risks',
+  'briefing.assumptions': 'Assumptions',
+  'briefing.recommendation_pending': 'Recommendation pending',
+  'briefing.pdf_error': 'PDF error',
+  'briefing.generated': 'Briefing generated',
+  'briefing.error': 'Briefing error',
+  'coa.why_won': 'Why This COA Won',
+  'coa.friendly_detected': 'Friendly contacts detected:',
+  'coa.assets_assignable': 'Assets assignable to top COA:',
+  'coa.only_one_available': 'Only one scored COA is currently available, so there is no runner-up comparison yet.',
+  'coa.winner': 'Winner:',
+  'coa.asset_support': 'Asset Support',
+  'coa.threat_handling': 'Threat Handling',
+  'coa.infra_protection': 'Infra Protection',
+  'coa.expected_effect': 'Expected Effect:',
+  'coa.tradeoff': 'Trade-off:',
+  'coa.missing': 'Missing:',
+  'coa.assumptions': 'Assumptions:',
+  'coa.plain_meaning': 'Plain meaning:',
+  'coa.plain_meaning_text': 'this is a bundle of several COAs that the allocator thinks can run together without overusing the same assets.',
+  'coa.member_coas': 'Member COAs:',
+  'coa.planned_tasks': 'Planned Tasks:',
+  'coa.dependencies': 'Dependencies:',
+  'coa.recommended_bundle': 'Recommended Bundle',
+  'query.disclaimer_title': 'Advisory only.',
+  'query.disclaimer_body': 'LLM explains; forecasts are simulation-based. Responses do not authorize decisions or actions.',
+  'query.input_placeholder': 'Ask about the current situation, a COA, or a what-if scenario...',
+  'query.ask_btn': 'Ask',
+  'query.busy': 'Thinking...',
+  'query.error': 'Error',
+  'query.no_answer': 'No answer returned.',
+  'query.meta.llm': 'LLM-assisted',
+  'query.meta.deterministic': 'Deterministic',
+  'query.meta.forecast': 'Forecast / What-if',
+  'query.meta.fallback': 'Fallback',
+  'query.sources': 'Sources:',
+  'llm.idle': 'LLM idle',
+  'llm.working': 'LLM working...',
+  'llm.queue': 'LLM queue',
+  'llm.pending': 'pending',
+  'llm.last_error': 'Last LLM error',
+  'event_summary.empty': 'No significant event summary yet.',
+  'event_summary.tick': 'Tick',
+  'event_summary.type': 'Event',
+  'event_summary.language': 'Language',
+  'event_summary.fallback': 'Fallback reason',
+  'event_summary.status': 'LLM status',
+  'event_summary.generated': 'Generated',
+  'event_summary.failed': 'Fallback',
+  'query.forecast_results': 'Forecast Results',
+  'query.forecast.threat_trend': 'Threat Trend',
+  'query.forecast.confidence': 'Confidence',
+  'query.forecast.threat_level': 'Threat Level',
+  'query.forecast.contacts': 'Contacts',
+  'query.forecast.horizon': 'Horizon',
+  'query.forecast.ticks': 'ticks',
+  'query.forecast.key_risks': 'Key Risks:',
+  'query.forecast.stimuli_fired': 'Stimuli Fired:',
+  'query.trend.increase': 'increase',
+  'query.trend.decrease': 'decrease',
+  'query.trend.stable': 'stable',
+  'query.chip.threat_label': 'Threat level',
+  'query.chip.threat_question': 'What is the current threat level?',
+  'query.chip.coa_label': 'Why this COA?',
+  'query.chip.coa_question': 'Why is this COA recommended?',
+  'query.chip.changed_label': 'What changed?',
+  'query.chip.changed_question': 'What changed recently?',
+  'query.chip.roe_label': 'ROE status',
+  'query.chip.roe_question': 'Which COAs require authorization?',
+  'query.chip.cable_label': 'Cable what-if',
+  'query.chip.cable_question': 'What if the cable is severed?',
+  'query.chip.outcome_label': 'COA outcome',
+  'query.chip.outcome_question': 'What happens if we choose the recommended COA?',
+  'map.type': 'Type',
+  'map.classification': 'Classification',
+  'map.source': 'Source',
+  'map.confidence': 'Confidence',
+  'map.track_quality': 'Track Quality',
+  'map.last_update': 'Last Update',
+  'map.anomaly_score': 'Anomaly',
+  'map.threat_score': 'Threat',
+  'map.speed': 'Speed',
+  'map.heading': 'Heading',
+  'map.latitude': 'Latitude',
+  'map.longitude': 'Longitude',
+  'map.altitude': 'Altitude',
+  'map.depth': 'Depth',
+  'map.ais_off': 'AIS',
+  'map.ais_off_value': 'OFF',
+  'map.task_approach': 'Task',
+  'map.approaching': 'Approaching',
+  'map.mmsi': 'MMSI',
+  'map.suspicion': 'Suspicion',
+  'map.destination': 'Destination',
+  'map.nearest_infra': 'Nearest infra',
+  'map.flags': 'Flags',
+  'map.considered_in_analysis': 'Considered in analysis',
+  'map.considered_yes': 'yes',
+  'contact.details': 'Contact Details',
+  'contact.flag_maneuver': 'Maneuver',
+  'contact.flag_approach': 'Approach',
+  'contact.none_selected': 'No contact selected',
+  'sim.hide_advanced': 'Hide Advanced Placement',
+  'sim.show_advanced': 'Show Advanced Placement',
+  'sim.cancel_map_placement': 'Cancel Map Placement',
+  'sim.place_unit': 'Place Unit on Map',
+  'sim.move_unit': 'Move',
+  'sim.moving_unit': 'Click on map to move unit',
+  'sim.no_units': 'No units available',
+  'sim.click_map': 'Click on map to place unit',
+  'sim.combat_feed': 'Combat Contact Feed',
+  'sim.combat_feed_desc': 'Synthetic ship CMS tracks for air, surface, and subsurface contacts.',
+  'sim.combat_feed_enabled': 'Combat feed enabled',
+  'sim.combat_feed_disabled': 'Combat feed disabled',
+  'sim.combat_density': 'Density',
+  'sim.combat_scenario': 'Scenario',
+  'sim.combat_aircraft': 'Add Aircraft',
+  'sim.combat_vessel': 'Add Vessel',
+  'sim.combat_submarine': 'Add Submarine',
+  'sim.combat_suspicious': 'Inject Suspicious Contact',
+  'sim.preset_loaded': 'Preset loaded. Adjust position if needed, then click Add Unit.',
+  'sim.no_injections': 'No manual injections to undo.',
+  'sim.undo_failed': 'Undo failed:',
+  'sim.removed_last': 'Removed last injected unit',
+  'sim.scenario_reset': 'Scenario reset. Press Start to run again.',
+  'sim.reset_failed': 'Reset failed:',
+  'sim.unit_updated': 'Unit updated',
+  'sim.apply_schedule': 'Apply / Schedule',
+  'sim.close': 'Close',
+  'sim.lat': 'Lat',
+  'sim.lon': 'Lon',
+  'asset.explicit_source': 'Asset pool source: explicit engine inventory with {units} available unit(s) across {types} asset type(s).',
+  'asset.inferred_source': 'Asset pool source: inferred from active friendly contacts. Current inferred support: {vessels} allied vessel(s) and {isr} ISR/UAV support contact(s).',
+  'log.dashboard_ready': 'Dashboard ready. Select a scenario and click Start.',
+  'log.tip_quick_actions': 'Tip: use the big quick actions in Simulator if you want immediate threat/COA changes.',
+  'log.tip_playbooks': 'Use mission playbooks for realistic test cases: maritime threat, UAV near airport, EW escalation, or allied support.',
+};
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+function t(key, fallback) {
+  return state.uiTranslations[key] || UI_TEXT[key] || fallback || key;
+}
+
+function tf(key, fallback, vars = {}) {
+  return t(key, fallback).replace(/\{(\w+)\}/g, (_, name) => String(vars[name] ?? ''));
+}
+
+function collectSourceUiStrings() {
+  if (state.sourceUiStrings) return state.sourceUiStrings;
+  const strings = {...UI_TEXT};
+  document.querySelectorAll('[data-i18n]').forEach((node) => {
+    const key = node.dataset.i18n;
+    if (!key || strings[key]) return;
+    strings[key] = node.innerHTML.trim();
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((node) => {
+    const key = node.dataset.i18nPlaceholder;
+    if (!key || strings[key]) return;
+    strings[key] = (node.getAttribute('placeholder') || '').trim();
+  });
+  document.querySelectorAll('[data-q-key]').forEach((node) => {
+    const key = node.dataset.qKey;
+    if (!key || strings[key]) return;
+    strings[key] = (node.getAttribute('data-q') || '').trim();
+  });
+  state.sourceUiStrings = strings;
+  return strings;
+}
+
+async function getUiTranslations(language) {
+  const existing = state.uiTranslationCache[language];
+  if (existing && existing.__ready) return existing;
+  const translations = existing || {...(STATIC_UI_TRANSLATIONS[language] || {})};
+  state.uiTranslationCache[language] = translations;
+  if (language === 'en') {
+    translations.__ready = true;
+    return translations;
+  }
+
+  const sourceStrings = collectSourceUiStrings();
+  const missing = {};
+  Object.entries(sourceStrings).forEach(([key, value]) => {
+    if (!translations[key]) missing[key] = value;
+  });
+
+  if (Object.keys(missing).length) {
+    try {
+      const result = await api('/v1/engine/translate-ui', {
+        method: 'POST',
+        body: JSON.stringify({language, strings: missing}),
+      });
+      Object.assign(translations, result.translations || {});
+    } catch (_error) {
+      // Keep static or English fallback text when dynamic translation is unavailable.
+    }
+  }
+
+  translations.__ready = true;
+  return translations;
+}
+
+function applyStaticTranslations() {
+  document.querySelectorAll('[data-i18n]').forEach((node) => {
+    const key = node.dataset.i18n;
+    if (!key) return;
+    const translated = t(key, node.innerHTML);
+    const counter = node.querySelector('.tab-cnt');
+    if (counter) {
+      const countHtml = counter.outerHTML;
+      const label = translated.replace(/<[^>]*>/g, '').trim();
+      node.innerHTML = `${esc(label)} ${countHtml}`;
+      return;
+    }
+    node.innerHTML = translated;
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((node) => {
+    const key = node.dataset.i18nPlaceholder;
+    if (!key) return;
+    node.setAttribute('placeholder', t(key, node.getAttribute('placeholder') || ''));
+  });
+}
+
+function renderQueryUi() {
+  const input = document.getElementById('query-input');
+  const button = document.getElementById('query-ask-btn');
+  const disclaimerTitle = document.getElementById('query-disclaimer-title');
+  const disclaimerBody = document.getElementById('query-disclaimer-body');
+
+  if (input) input.setAttribute('placeholder', t('query.input_placeholder', 'Ask about the current situation, a COA, or a what-if scenario...'));
+  if (button) button.textContent = t('query.ask_btn', 'Ask');
+  if (disclaimerTitle) disclaimerTitle.textContent = t('query.disclaimer_title', 'Advisory only.');
+  if (disclaimerBody) disclaimerBody.textContent = t('query.disclaimer_body', 'LLM explains; forecasts are simulation-based. Responses do not authorize decisions or actions.');
+
+  document.querySelectorAll('.query-chip').forEach((chip) => {
+    const labelKey = chip.dataset.i18n;
+    const questionKey = chip.dataset.qKey;
+    if (labelKey) chip.textContent = t(labelKey, chip.textContent);
+    if (questionKey) chip.setAttribute('data-q', t(questionKey, chip.getAttribute('data-q') || ''));
+  });
+}
+
+function fmtPct(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '--';
+  return `${Math.round(Number(value) * 100)}%`;
+}
+
+function fmtCoord(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '--';
+  return Number(value).toFixed(6);
+}
+
+function fmtLatLon(lat, lon) {
+  return `${fmtCoord(lat)}, ${fmtCoord(lon)}`;
+}
+
+function normalizeUnitClass(contact) {
+  const attrs = contact?.attributes || {};
+  const domain = String(attrs.domain || '').toLowerCase();
+  const subtype = String(attrs.subtype || '').toLowerCase();
+  const explicit = attrs.unit_class || contact?.contact_type || 'unknown';
+  if (domain === 'air' || subtype === 'commercial_airliner' || subtype === 'military_jet' || subtype === 'helicopter') return 'aircraft';
+  if (subtype === 'uav') return 'uav';
+  if (domain === 'subsurface' || subtype === 'submarine') return 'submarine';
+  if (domain === 'surface' && subtype) return 'vessel';
+  return explicit;
+}
+
+function normalizedAllegiance(contact) {
+  const allegiance = String(contact?.attributes?.allegiance || '').toLowerCase();
+  if (allegiance === 'neutral' || allegiance === 'infrastructure') return allegiance;
+  if (contact?.is_hostile || allegiance === 'hostile' || allegiance === 'red') return 'hostile';
+  return 'friendly';
+}
+
+function contactSource(contact) {
+  const source = String(contact?.source || contact?.attributes?.source_system || '').toLowerCase();
+  if (source === 'combat_system' || contact?.attributes?.combat_contact) return 'combat_system';
+  if (source === 'aishub' || source === 'noaa_replay' || source === 'ais') return 'ais';
+  if (source === 'simulation' || source === 'dashboard') return 'simulation';
+  return source || 'simulation';
+}
+
+function contactDomain(contact) {
+  const attrDomain = String(contact?.attributes?.domain || '').toLowerCase();
+  if (attrDomain === 'air') return 'air';
+  if (attrDomain === 'land') return 'land';
+  if (attrDomain === 'infra') return 'infra';
+  if (attrDomain === 'surface' || attrDomain === 'subsurface') return 'naval';
+  const unitClass = normalizeUnitClass(contact);
+  if (['aircraft', 'uav', 'isr_asset'].includes(unitClass) || contact.contact_type === 'uav') return 'air';
+  if (['ground_unit', 'convoy'].includes(unitClass) || contact.contact_type === 'convoy') return 'land';
+  if (['event_marker', 'infrastructure', 'jamming', 'cable_event'].includes(unitClass) || ['infrastructure', 'jamming', 'cable_event'].includes(contact.contact_type)) return 'infra';
+  return 'naval';
+}
+
+function isEventContact(contact) {
+  const unitClass = normalizeUnitClass(contact);
+  return ['event_marker', 'jamming', 'cable_event'].includes(unitClass) || ['jamming', 'cable_event'].includes(contact.contact_type);
+}
+
+function sourceLabel(contact) {
+  const source = contactSource(contact);
+  if (source === 'ais') return 'AIS';
+  if (source === 'combat_system') return 'Combat System';
+  if (source === 'simulation') return 'Simulation';
+  return source;
+}
+
+function findSelectedContact() {
+  if (!state.selectedEntityId) return null;
+  const source = state.selectedContactSource || 'simulation';
+  if (source === 'ais') {
+    return (state.aisContacts || []).find((contact) => contact.entity_id === state.selectedEntityId) ||
+      (state.contacts || []).find((contact) => contact.entity_id === state.selectedEntityId && contactSource(contact) === 'ais') ||
+      null;
+  }
+  return (state.contacts || []).find((contact) => contact.entity_id === state.selectedEntityId && contactSource(contact) === source) ||
+    (state.contacts || []).find((contact) => contact.entity_id === state.selectedEntityId) ||
+    null;
+}
+
+const MAP_STYLES = {
+  'osm-standard': {
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    options: {maxZoom: 19, attribution: '&copy; OpenStreetMap'}
+  },
+  'osm-humanitarian': {
+    url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+    options: {maxZoom: 19, attribution: '&copy; OpenStreetMap, HOT'}
+  },
+  'carto-light': {
+    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    options: {maxZoom: 20, attribution: '&copy; OpenStreetMap &copy; CARTO'}
+  },
+  'carto-dark': {
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    options: {maxZoom: 20, attribution: '&copy; OpenStreetMap &copy; CARTO'}
+  },
+  'open-topo': {
+    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    options: {maxZoom: 17, attribution: '&copy; OpenStreetMap, SRTM | OpenTopoMap'}
+  }
+};
+
+const SCENARIO_BOUNDS = __SCENARIO_BOUNDS_JSON__;
+const CABLE_ROUTES = __CABLE_ROUTES_JSON__;
+const STATIC_UI_TRANSLATIONS = __STATIC_UI_TRANSLATIONS_JSON__;
+
+function makeId(prefix) {
+  const seed = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  return `${prefix}-${seed.slice(0, 8).toUpperCase()}`;
+}
+
+function formatParagraphs(text) {
+  const chunks = String(text || '')
+    .split(/\n{2,}/)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean);
+  return chunks.length ? chunks.map((chunk) => `<p>${esc(chunk)}</p>`).join('') : `<p>${esc(t('common.none', 'None.'))}</p>`;
+}
+
+function formatBulletList(items) {
+  const values = (items || []).map((item) => String(item || '').trim()).filter(Boolean);
+  return values.length ? `<ul>${values.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : `<p>${esc(t('common.none', 'None.'))}</p>`;
+}
+
+function localizedValue(node, field, fallback = null) {
+  if (!node) return fallback;
+  const langBlock = node.localized && node.localized[state.uiLanguage];
+  if (langBlock && langBlock[field] !== undefined && langBlock[field] !== null) return langBlock[field];
+  return node[field] !== undefined && node[field] !== null ? node[field] : fallback;
+}
+
+function clearBriefings() {
+  state.briefing = null;
+  state.briefingLanguage = document.getElementById('briefing-lang')?.value || state.briefingLanguage || 'en';
+  const primaryPdf = document.getElementById('btn-pdf');
+  const englishPdf = document.getElementById('btn-pdf-en');
+  if (primaryPdf) primaryPdf.style.display = 'none';
+  if (englishPdf) englishPdf.style.display = 'none';
+  if (document.getElementById('bf-body')) renderBriefing();
+}
+
+function setSimStatus(message, kind='ok') {
+  state.simStatus = message ? {message, kind} : null;
+  const box = document.getElementById('sim-status');
+  if (!box) return;
+  if (!state.simStatus) {
+    box.style.display = 'none';
+    box.textContent = '';
+    box.className = 'sim-status';
+    return;
+  }
+  box.style.display = 'block';
+  box.textContent = state.simStatus.message;
+  box.className = `sim-status ${state.simStatus.kind}`;
+}
+
+function numberOrNull(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function setBadge(text, klass) {
+  const badge = document.getElementById('badge');
+  badge.textContent = text;
+  badge.className = `badge ${klass}`;
+}
+
+function logLine(message) {
+  const elog = document.getElementById('elog');
+  const row = document.createElement('div');
+  row.className = 'le';
+  row.innerHTML = `<span class="lt">${new Date().toISOString().slice(11,19)}Z</span>${esc(message)}`;
+  elog.prepend(row);
+}
+
+function logAnalysisReason(reason, trigger, tick) {
+  if (!reason) return;
+  const key = `${tick || 'manual'}|${trigger || 'unknown'}|${reason}`;
+  if (state.lastAnalysisLogKey === key) return;
+  state.lastAnalysisLogKey = key;
+  logLine(`Analysis [${trigger || 'update'}]: ${reason}`);
+}
+
+function setWhyChanged(message) {
+  state.lastWhyChanged = message || state.lastWhyChanged;
+  const node = document.getElementById('why-changed');
+  if (node) node.textContent = state.lastWhyChanged;
+}
+
+function initMap() {
+  state.map = L.map('map').setView([57.5, 19.5], 6);
+  setMapStyle('osm-standard');
+  focusScenario(state.scenario);
+  updateCableRoutes();
+  state.map.on('click', async (evt) => {
+    state.mapPlacement = evt.latlng;
+    state.simDraft.lat = evt.latlng.lat.toFixed(6);
+    state.simDraft.lon = evt.latlng.lng.toFixed(6);
+    syncSimInputs();
+    if (state.mapInteractionMode === 'add') {
+      await injectUnit(evt.latlng);
+      return;
+    }
+    if (state.mapInteractionMode === 'move' && state.selectedEntityId) {
+      await moveUnitTo(state.selectedEntityId, evt.latlng);
+      return;
+    }
+    renderSimulator();
+  });
+  state.map.on('moveend', () => {
+    if (state.show_ais) fetchVisibleAis();
+  });
+}
+
+function setMapStyle(styleKey) {
+  const selected = MAP_STYLES[styleKey] || MAP_STYLES['osm-standard'];
+  if (state.mapLayer) state.map.removeLayer(state.mapLayer);
+  state.mapLayer = L.tileLayer(selected.url, selected.options).addTo(state.map);
+}
+
+function focusScenario(scenarioId) {
+  const bounds = SCENARIO_BOUNDS[scenarioId];
+  if (!bounds || !state.map) return;
+  state.map.fitBounds(
+    [[bounds.lat_min, bounds.lon_min], [bounds.lat_max, bounds.lon_max]],
+    {padding: [16, 16]}
+  );
+}
+
+function updateCableRoutes() {
+  if (!state.map) return;
+  (state.cableLayers || []).forEach((layer) => state.map.removeLayer(layer));
+  state.cableLayers = [];
+  if (!state.showCableRoutes) return;
+
+  const CABLE_STATUS_COLORS = {intact: '#2e8b57', severed: '#cc0000', threatened: '#ff6600'};
+  const routes = CABLE_ROUTES[state.scenario] || [];
+  routes.forEach((route) => {
+    const latlngs = (route.points || []).map((point) => [point.lat, point.lon]);
+    if (!latlngs.length) return;
+    const status = route.status || 'intact';
+    const cableColor = CABLE_STATUS_COLORS[status] || CABLE_STATUS_COLORS.intact;
+    const dashArray = status === 'threatened' ? '10 8' : null;
+    const line = L.polyline(latlngs, {
+      color: cableColor,
+      weight: 4,
+      opacity: 0.8,
+      dashArray: dashArray,
+    }).addTo(state.map);
+    line.bindTooltip(`${route.name} (${status})`, {sticky: true});
+    state.cableLayers.push(line);
+
+    const landingSet = new Set(route.landing_points || []);
+    latlngs.forEach((latlng, i) => {
+      const isLanding = landingSet.has(i);
+      if (isLanding || i === 0 || i === latlngs.length - 1) {
+        const marker = L.circleMarker(latlng, {
+          radius: isLanding ? 6 : 4,
+          color: cableColor,
+          fillColor: cableColor,
+          fillOpacity: 0.7,
+          weight: 1,
+        }).addTo(state.map);
+        marker.bindTooltip(`${route.name} — ${isLanding ? 'Shore Landing' : 'Waypoint'}`, {sticky: true});
+        state.cableLayers.push(marker);
+      }
+    });
+  });
+}
+
+function activeContacts() {
+  return state.contacts.filter((contact) => {
+    const allegiance = normalizedAllegiance(contact);
+    const hostileKey = allegiance === 'neutral' ? 'neutral' : (allegiance === 'hostile' ? 'hostile' : 'friendly');
+    const domainKey = contactDomain(contact);
+    const source = contactSource(contact);
+    if (source === 'ais' && !state.show_ais) return false;
+    if (source === 'combat_system' && !state.show_combat_contacts) return false;
+    if (source === 'simulation' && !state.show_sim_entities) return false;
+    return state.filters[hostileKey] && state.filters[domainKey];
+  });
+}
+
+function mapEntityTypeToContactType(type) {
+  const mapping = {
+    vessel: 'vessel',
+    aircraft: 'uav',
+    uav: 'uav',
+    submarine: 'submarine',
+    ground_unit: 'unknown',
+    convoy: 'convoy',
+    isr_asset: 'uav',
+    neutral_vessel: 'vessel',
+    event_marker: 'unknown',
+    jamming: 'jamming',
+    cable_event: 'cable_event',
+    infrastructure: 'infrastructure',
+  };
+  return mapping[type] || 'unknown';
+}
+
+function markerPalette(contact) {
+  const allegiance = normalizedAllegiance(contact);
+  const source = contactSource(contact);
+  if (isEventContact(contact)) return {fill: '#f59e0b', stroke: '#fde68a'};
+  if (source === 'ais') {
+    if (allegiance === 'hostile') return {fill: '#ef4444', stroke: '#fecaca'};
+    if (allegiance === 'neutral') return {fill: '#0ea5e9', stroke: '#cffafe'};
+    return {fill: '#14b8a6', stroke: '#ccfbf1'};
+  }
+  if (source === 'combat_system') {
+    if (allegiance === 'hostile') return {fill: '#dc2626', stroke: '#fecaca'};
+    if (allegiance === 'neutral') return {fill: '#a855f7', stroke: '#e9d5ff'};
+    if (allegiance === 'infrastructure') return {fill: '#14b8a6', stroke: '#ccfbf1'};
+    return {fill: '#f59e0b', stroke: '#fde68a'};
+  }
+  if (allegiance === 'hostile') return {fill: '#dc2626', stroke: '#fecaca'};
+  if (allegiance === 'neutral') return {fill: '#94a3b8', stroke: '#f8fafc'};
+  if (allegiance === 'infrastructure') return {fill: '#14b8a6', stroke: '#ccfbf1'};
+  return {fill: '#2563eb', stroke: '#dbeafe'};
+}
+
+function markerSymbolSvg(unitClass, palette, selected = false, source = 'simulation') {
+  const outer = selected ? `<circle cx="18" cy="18" r="16" fill="none" stroke="#f8fafc" stroke-width="1.8" stroke-dasharray="2 2"></circle>` : '';
+  const common = `fill="${palette.fill}" stroke="${palette.stroke}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"`;
+  const sourceBadge = source === 'combat_system'
+    ? `<rect x="11" y="2.5" width="14" height="5.2" rx="1.5" fill="${palette.stroke}" opacity=".95"></rect><text x="18" y="7" text-anchor="middle" font-size="4" font-weight="800" fill="#0f172a">CMS</text>`
+    : source === 'ais'
+      ? `<rect x="11" y="28.3" width="14" height="5.2" rx="1.5" fill="${palette.stroke}" opacity=".95"></rect><text x="18" y="32.5" text-anchor="middle" font-size="4" font-weight="800" fill="#0f172a">AIS</text>`
+      : '';
+  const tacticalRing = source === 'combat_system'
+    ? `<circle cx="18" cy="18" r="13.5" fill="none" stroke="${palette.stroke}" stroke-width="1.1" stroke-dasharray="1.5 1.5"></circle>`
+    : '';
+  const symbols = {
+    vessel: `<path d="M8 22 L12 11 L24 11 L28 22 L18 28 Z" ${common}></path>`,
+    neutral_vessel: `<path d="M8 22 L12 11 L24 11 L28 22 L18 28 Z" ${common}></path><path d="M13 9 L13 5" stroke="${palette.stroke}" stroke-width="1.6"></path>`,
+    aircraft: `<path d="M18 5 L21 14 L31 17 L21 20 L18 31 L15 20 L5 17 L15 14 Z" ${common}></path>`,
+    uav: `<path d="M18 6 L27 18 L18 30 L9 18 Z" ${common}></path><circle cx="18" cy="18" r="3" fill="${palette.stroke}"></circle>`,
+    submarine: `<rect x="7" y="13" width="22" height="10" rx="5" ${common}></rect><path d="M14 13 L14 9 L20 9" stroke="${palette.stroke}" stroke-width="1.6" fill="none"></path><path d="M11 24 Q18 28 25 24" stroke="${palette.stroke}" stroke-width="1.2" fill="none" stroke-dasharray="2 2"></path>`,
+    ground_unit: `<rect x="9" y="10" width="18" height="16" rx="2" ${common}></rect><path d="M9 26 L18 31 L27 26" stroke="${palette.stroke}" stroke-width="1.6" fill="none"></path>`,
+    convoy: `<rect x="6" y="12" width="8" height="12" rx="1.5" ${common}></rect><rect x="15" y="12" width="8" height="12" rx="1.5" ${common}></rect><rect x="24" y="12" width="6" height="12" rx="1.5" ${common}></rect>`,
+    isr_asset: `<circle cx="18" cy="18" r="9" ${common}></circle><path d="M18 4 L18 10 M18 26 L18 32 M4 18 L10 18 M26 18 L32 18" stroke="${palette.stroke}" stroke-width="1.6"></path>`,
+    infrastructure: `<path d="M12 28 L18 8 L24 28 Z" ${common}></path><path d="M10 28 L26 28" stroke="${palette.stroke}" stroke-width="1.6"></path>`,
+    event_marker: `<path d="M18 6 L29 27 L7 27 Z" ${common}></path><path d="M18 13 L18 20" stroke="${palette.stroke}" stroke-width="1.8"></path><circle cx="18" cy="24" r="1.2" fill="${palette.stroke}"></circle>`,
+    jamming: `<circle cx="18" cy="18" r="4" ${common}></circle><path d="M24 12 Q30 18 24 24 M12 12 Q6 18 12 24" stroke="${palette.stroke}" stroke-width="1.8" fill="none"></path>`,
+    cable_event: `<path d="M8 14 C12 8, 24 8, 28 14" stroke="${palette.stroke}" stroke-width="1.8" fill="none"></path><path d="M10 22 C14 16, 22 16, 26 22" stroke="${palette.stroke}" stroke-width="1.8" fill="none"></path><path d="M14 12 L22 24 M22 12 L14 24" stroke="${palette.fill}" stroke-width="2.2"></path>`,
+    unknown: `<path d="M18 5 L29 12 L29 24 L18 31 L7 24 L7 12 Z" ${common}></path><text x="18" y="22" text-anchor="middle" font-size="14" font-weight="700" fill="${palette.stroke}">?</text>`,
+  };
+  return `<svg viewBox="0 0 36 36" aria-hidden="true">${outer}${tacticalRing}${symbols[unitClass] || symbols.unknown}${sourceBadge}</svg>`;
+}
+
+function markerHtml(contact) {
+  const unitClass = normalizeUnitClass(contact);
+  const palette = markerPalette(contact);
+  const selected = state.selectedEntityId === contact.entity_id;
+  const source = contactSource(contact);
+  const domainClass = contactDomain(contact);
+  const subsurfaceClass = String(contact?.attributes?.domain || '').toLowerCase() === 'subsurface' || contact.contact_type === 'submarine' ? ' subsurface' : '';
+  const trackClass = contact.attributes?.track_quality ? ` track-${String(contact.attributes.track_quality).toLowerCase()}` : '';
+  return `<div class="unit-icon source-${source} domain-${domainClass}${subsurfaceClass}${trackClass}${selected ? ' selected' : ''}">${markerSymbolSvg(unitClass, palette, selected, source)}</div>`;
+}
+
+function markerIcon(contact) {
+  return L.divIcon({
+    className: 'unit-marker',
+    html: markerHtml(contact),
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
+    popupAnchor: [0, -16],
+  });
+}
+
+function setSelectedEntity(entityId, source = 'simulation') {
+  state.selectedEntityId = entityId || null;
+  state.selectedContactSource = source || 'simulation';
+  updateMap();
+  renderContacts();
+  renderSimulator();
+  renderContactDetails();
+}
+
+function renderMapModeBanner() {
+  const node = document.getElementById('map-mode-banner');
+  if (!node) return;
+  if (state.mapInteractionMode === 'add') {
+    node.style.display = 'block';
+    node.className = 'map-mode-banner';
+    node.textContent = `${t('sim.click_map', 'Click on map to place unit')}: ${state.simDraft.type} · ${state.simDraft.ally}`;
+    return;
+  }
+  if (state.mapInteractionMode === 'move' && state.selectedEntityId) {
+    node.style.display = 'block';
+    node.className = 'map-mode-banner move';
+    node.textContent = `${t('sim.moving_unit', 'Click on map to move unit')}: ${state.selectedEntityId}`;
+    return;
+  }
+  node.style.display = 'none';
+  node.textContent = '';
+}
+
+function contactDetailValue(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (Array.isArray(value)) return value.length ? value.join(', ') : '—';
+  return String(value);
+}
+
+function renderContactDetails() {
+  const node = document.getElementById('contact-detail-body');
+  const status = document.getElementById('contact-detail-status');
+  if (!node) return;
+  const contact = findSelectedContact();
+  if (!contact) {
+    if (status) status.textContent = t('contact.none_selected', 'No contact selected');
+    node.innerHTML = `<div class="empty">${esc(t('contact.none_selected', 'No contact selected'))}</div>`;
+    return;
+  }
+  const attrs = contact.attributes || {};
+  const anomaly = (state.anomalies || []).find((item) => item.entity_id === contact.entity_id);
+  const threat = (state.threats || []).find((item) => item.entity_id === contact.entity_id);
+  const behaviorFlags = attrs.behavior_flags || attrs.flags || [];
+  const updateTs = contact.timestamp ? new Date(contact.timestamp).toISOString() : '—';
+  const altitudeValue = contact.attributes?.altitude_ft != null ? `${contact.attributes.altitude_ft} ft` : '—';
+  const depthValue = contact.attributes?.depth_m != null ? `${contact.attributes.depth_m} m` : '—';
+  if (status) status.textContent = `${sourceLabel(contact)} · ${contact.entity_id}`;
+  node.innerHTML = `
+    <div class="cd-title">${esc(attrs.name || contact.entity_id)}</div>
+    <div class="cd-grid">
+      <div><span class="cd-lbl">${esc(t('map.type', 'Type'))}</span><span class="cd-val">${esc(contact.contact_type)}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.classification', 'Classification'))}</span><span class="cd-val">${esc(contact.attributes?.subtype || normalizeUnitClass(contact))}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.source', 'Source'))}</span><span class="cd-val">${esc(contactSource(contact))}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.confidence', 'Confidence'))}</span><span class="cd-val">${esc(fmtPct(contact.confidence))}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.track_quality', 'Track Quality'))}</span><span class="cd-val">${esc(contact.attributes?.track_quality || '—')}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.last_update', 'Last Update'))}</span><span class="cd-val">${esc(updateTs)}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.latitude', 'Latitude'))}</span><span class="cd-val">${esc(fmtCoord(contact.lat))}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.longitude', 'Longitude'))}</span><span class="cd-val">${esc(fmtCoord(contact.lon))}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.speed', 'Speed'))}</span><span class="cd-val">${esc(contact.speed)} kts</span></div>
+      <div><span class="cd-lbl">${esc(t('map.heading', 'Heading'))}</span><span class="cd-val">${esc(contact.heading)}°</span></div>
+      <div><span class="cd-lbl">${esc(t('map.altitude', 'Altitude'))}</span><span class="cd-val">${esc(altitudeValue)}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.depth', 'Depth'))}</span><span class="cd-val">${esc(depthValue)}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.anomaly_score', 'Anomaly'))}</span><span class="cd-val">${esc(anomaly ? `${anomaly.anomaly_score}` : '—')}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.threat_score', 'Threat'))}</span><span class="cd-val">${esc(threat ? fmtPct(threat.threat_probability) : '—')}</span></div>
+    </div>
+    <div class="cd-section">
+      <div class="cd-lbl">${esc(t('map.flags', 'Flags'))}</div>
+      <div class="cd-list">${esc(contactDetailValue(behaviorFlags))}</div>
+    </div>
+    <div class="cd-section">
+      <div class="cd-lbl">ID</div>
+      <div class="cd-list">${esc(contact.entity_id)}</div>
+    </div>
+  `;
+}
+
+function popupHtml(contact) {
+  const attrs = contact.attributes || {};
+  const lines = [
+    `<b>${esc(attrs.name || contact.entity_id)}</b>`,
+    `${esc(t('map.type', 'Type'))}: ${esc(contact.contact_type)}`,
+    `${esc(t('map.classification', 'Classification'))}: ${esc(normalizeUnitClass(contact))}`,
+    `${esc(t('map.source', 'Source'))}: ${esc(contactSource(contact))}`,
+    `${esc(t('map.confidence', 'Confidence'))}: ${esc(fmtPct(contact.confidence))}`,
+    `${esc(t('map.latitude', 'Latitude'))}: ${esc(fmtCoord(contact.lat))}`,
+    `${esc(t('map.longitude', 'Longitude'))}: ${esc(fmtCoord(contact.lon))}`,
+    `${esc(t('map.speed', 'Speed'))}: ${esc(contact.speed)} kts`,
+    `${esc(t('map.heading', 'Heading'))}: ${esc(contact.heading)}`,
+    `${esc(t('map.last_update', 'Last Update'))}: ${esc(contact.timestamp ? new Date(contact.timestamp).toISOString() : '—')}`,
+  ];
+  if (contact.attributes?.altitude_ft != null) lines.push(`${esc(t('map.altitude', 'Altitude'))}: ${esc(contact.attributes.altitude_ft)} ft`);
+  if (contact.attributes?.depth_m != null) lines.push(`${esc(t('map.depth', 'Depth'))}: ${esc(contact.attributes.depth_m)} m`);
+  if (contact.attributes?.track_quality) lines.push(`${esc(t('map.track_quality', 'Track Quality'))}: ${esc(contact.attributes.track_quality)}`);
+  if (attrs.ais_off) lines.push(`${esc(t('map.ais_off', 'AIS'))}: ${esc(t('map.ais_off_value', 'OFF'))}`);
+  if (attrs.task === 'approach_point') lines.push(`${esc(t('map.task_approach', 'Task'))}: ${esc(t('map.approaching', 'Approaching'))} ${esc(fmtLatLon(attrs.target_lat, attrs.target_lon))}`);
+  if (attrs.behavior_mode) lines.push(`${esc(t('map.behavior', 'Behavior'))}: ${esc(attrs.behavior_mode)}`);
+  if (attrs.intent) lines.push(`${esc(t('map.intent', 'Intent'))}: ${esc(attrs.intent)}`);
+  if (attrs.target_infra) lines.push(`${esc(t('map.target_infra', 'Target'))}: ${esc(attrs.target_infra)}`);
+  if (attrs.reacting_to && attrs.reacting_to.length) lines.push(`${esc(t('map.reacting_to', 'Reacting to'))}: ${esc(attrs.reacting_to.join(', '))}`);
+  return lines.join('<br>');
+}
+
+function aisPopupHtml(contact) {
+  const flags = (contact.suspicious_flags || []).join(', ');
+  const lines = [
+    `<b>${esc(contact.name || contact.entity_id)}</b>`,
+    `${esc(t('map.mmsi', 'MMSI'))}: ${esc(contact.mmsi || '')}`,
+    `${esc(t('map.source', 'Source'))}: AIS`,
+    `${esc(t('map.confidence', 'Confidence'))}: ${esc(fmtPct(contact.suspicion_score))}`,
+    `${esc(t('map.latitude', 'Latitude'))}: ${esc(fmtCoord(contact.lat))}`,
+    `${esc(t('map.longitude', 'Longitude'))}: ${esc(fmtCoord(contact.lon))}`,
+    `${esc(t('map.speed', 'Speed'))}: ${esc(contact.speed)} kts`,
+    `${esc(t('map.heading', 'Heading'))}: ${esc(contact.heading)}`,
+    `${esc(t('map.suspicion', 'Suspicion'))}: ${esc(fmtPct(contact.suspicion_score))}`,
+  ];
+  if (contact.destination) lines.push(`${esc(t('map.destination', 'Destination'))}: ${esc(contact.destination)}`);
+  if (contact.nearest_infrastructure) lines.push(`${esc(t('map.nearest_infra', 'Nearest infra'))}: ${esc(contact.nearest_infrastructure)} (${esc(contact.nearest_infrastructure_km)} km)`);
+  if (flags) lines.push(`${esc(t('map.flags', 'Flags'))}: ${esc(flags)}`);
+  if (contact.considered_in_analysis) lines.push(`${esc(t('map.considered_in_analysis', 'Considered in analysis'))}: ${esc(t('map.considered_yes', 'yes'))}`);
+  return lines.join('<br>');
+}
+
+function updateMap() {
+  const visibleIds = new Set();
+  activeContacts().forEach((contact) => {
+    visibleIds.add(contact.entity_id);
+    let marker = state.markers.get(contact.entity_id);
+    if (!marker) {
+      marker = L.marker([contact.lat, contact.lon], {icon: markerIcon(contact)}).addTo(state.map);
+      state.markers.set(contact.entity_id, marker);
+    } else {
+      marker.setLatLng([contact.lat, contact.lon]);
+      marker.setIcon(markerIcon(contact));
+    }
+    marker.bindPopup(popupHtml(contact));
+    marker.off('click').on('click', () => setSelectedEntity(contact.entity_id, contactSource(contact)));
+  });
+  for (const [entityId, marker] of state.markers.entries()) {
+    if (!visibleIds.has(entityId)) {
+      state.map.removeLayer(marker);
+      state.markers.delete(entityId);
+    }
+  }
+
+  const visibleAisIds = new Set();
+  if (state.show_ais) {
+    (state.aisContacts || []).forEach((contact) => {
+      visibleAisIds.add(contact.entity_id);
+      const suspicious = Number(contact.suspicion_score || 0) >= 0.6;
+      const decoratedContact = {
+        ...contact,
+        contact_type: 'vessel',
+        entity_id: contact.entity_id,
+        is_hostile: suspicious,
+        attributes: {
+          ...(contact.attributes || {}),
+          allegiance: suspicious ? 'hostile' : 'neutral',
+          unit_class: suspicious ? 'event_marker' : 'neutral_vessel',
+        },
+      };
+      let marker = state.aisMarkers.get(contact.entity_id);
+      if (!marker) {
+        marker = L.marker([contact.lat, contact.lon], {icon: markerIcon(decoratedContact)}).addTo(state.map);
+        state.aisMarkers.set(contact.entity_id, marker);
+      } else {
+        marker.setLatLng([contact.lat, contact.lon]);
+        marker.setIcon(markerIcon(decoratedContact));
+      }
+      marker.bindPopup(aisPopupHtml(contact));
+      marker.off('click').on('click', () => setSelectedEntity(contact.entity_id, 'ais'));
+    });
+  }
+  for (const [entityId, marker] of state.aisMarkers.entries()) {
+    if (!visibleAisIds.has(entityId)) {
+      state.map.removeLayer(marker);
+      state.aisMarkers.delete(entityId);
+    }
+  }
+}
+
+function upsertContacts(incoming) {
+  const merged = new Map((state.contacts || []).map((contact) => [contact.entity_id, contact]));
+  (incoming || []).forEach((contact) => merged.set(contact.entity_id, contact));
+  state.contacts = [...merged.values()];
+}
+
+function renderContacts() {
+  const contacts = activeContacts();
+  const tabCount = document.getElementById('tab-ct');
+  const statContacts = document.getElementById('s-ct');
+  const statTracks = document.getElementById('s-tk');
+  const statCoas = document.getElementById('s-co');
+  const statProcessed = document.getElementById('s-pr');
+  if (tabCount) tabCount.textContent = contacts.length;
+  if (statContacts) statContacts.textContent = contacts.length;
+  if (statTracks) statTracks.textContent = Object.keys(state.tracks || {}).length;
+  if (statCoas) statCoas.textContent = state.coas.length;
+  const processed = state.lastState?.contacts_processed ?? 0;
+  if (statProcessed) statProcessed.textContent = processed;
+  const list = document.getElementById('ct-list');
+  if (!list) return;
+  if (!contacts.length) {
+    list.innerHTML = `<div class="empty">${esc(t('contacts.empty', 'No contacts'))}</div>`;
+    return;
+  }
+  list.innerHTML = contacts.map((contact) => {
+    const attrs = contact.attributes || {};
+    const source = contactSource(contact);
+    const selected = state.selectedEntityId === contact.entity_id && state.selectedContactSource === source;
+    const flags = [];
+    if (attrs.ais_off) flags.push('AIS OFF');
+    if (attrs.suspicious_maneuver) flags.push(t('contact.flag_maneuver', 'Maneuver'));
+    if (attrs.task === 'approach_point') flags.push(t('contact.flag_approach', 'Approach'));
+    if (attrs.behavior_mode) flags.push(attrs.behavior_mode.replace(/_/g, ' '));
+    return `
+      <div class="ct-item ${selected ? 'contact-selected' : ''}" data-entity="${esc(contact.entity_id)}" data-source="${esc(source)}">
+        <div class="ct-name">${esc(attrs.name || contact.entity_id)}</div>
+        <div class="ct-type">${esc(contact.contact_type)} · ${esc(source)}</div>
+        <div class="ct-spd">${esc(contact.speed)} kts<br>${esc(fmtLatLon(contact.lat, contact.lon))}</div>
+        <div class="ct-warn">${esc(flags.join(' '))}</div>
+        <div class="ct-actions">
+          <button data-action="select-contact" data-entity="${esc(contact.entity_id)}" data-source="${esc(source)}">Select</button>
+          <button data-action="move-contact" data-entity="${esc(contact.entity_id)}">${esc(t('sim.move_unit', 'Move'))}</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+  renderContactDetails();
+}
+
+
+
+function roeRecommendationWarning(coa){
+  if(!coa||!coa.roe_status||coa.roe_status==='allowed')return'';
+  const icon=coa.roe_status==='rejected'?'&#x1F6D1;':'&#x26A0;';
+  const label=coa.roe_status==='rejected'?'Rejected by ROE':'Authorization Required';
+  return'<div class="roe-auth-warning"><span class="roe-auth-icon">'+icon+'</span> <b>'+esc(label)+':</b> '+esc(coa.roe_reason||'This COA has ROE restrictions')+' <span class="roe-auth-badge">'+esc(coa.roe_status)+'</span></div>';
+}
+
+function roeStatusClass(coa){const s=(coa.roe_status||"allowed").toLowerCase().replace(/ /g,"_");return"roe-badge "+s}
+function roeStatusIcon(coa){const s=(coa.roe_status||"allowed").toLowerCase();const m={allowed:"&#x2713;",restricted:"&#x26A0;",requires_authorization:"&#x26D4;",rejected:"&#x1F6D1;"};return m[s]||""}
+function roeStatusLabel(coa){const s=(coa.roe_status||"allowed").toLowerCase();const labels={allowed:"&#x2713; Allowed",restricted:"&#x26A0; Restricted",requires_authorization:"&#x26D4; Auth Required",rejected:"&#x1F6D1; Rejected"};return labels[s]||(coa.roe_status||"Allowed")}
+function roeCardClass(coa){return"roe-"+(coa.roe_status||"allowed").toLowerCase().replace(/ /g,"_")}
+function roeReasonStrip(coa){
+  if(!coa)return'';
+  const s=(coa.roe_status||"allowed").toLowerCase().replace(/ /g,"_");
+  if(s==='allowed'&&(!coa.roe_reason||!coa.roe_reason.trim()))return'<div class="roe-reason-strip allowed"><span class="roe-strip-icon">&#x2713;</span><span>ROE cleared — no restrictions triggered</span></div>';
+  const icons={allowed:"&#x2713;",restricted:"&#x26A0;",requires_authorization:"&#x26D4;",rejected:"&#x1F6D1;"};
+  const reason=coa.roe_reason||"No reason provided";
+  return'<div class="roe-reason-strip '+esc(s)+'"><span class="roe-strip-icon">'+(icons[s]||"")+'</span><span>'+esc(reason)+'</span></div>';
+}
+function roeBannerHtml(coas){
+  if(!coas||!coas.length)return'';
+  const auth=coas.filter(i=>{const s=(i.coa||{}).roe_status||"allowed";return s==="requires_authorization"||s==="rejected"});
+  if(!auth.length)return'';
+  const rejected=auth.filter(i=>(i.coa||{}).roe_status==="rejected").length;
+  const needsAuth=auth.filter(i=>(i.coa||{}).roe_status==="requires_authorization").length;
+  let msg='';
+  if(needsAuth)msg+=needsAuth+' COA'+(needsAuth>1?'s':'')+' require'+(needsAuth===1?'s':'')+' authorization before execution. ';
+  if(rejected)msg+=rejected+' COA'+(rejected>1?'s':'')+(rejected===1?' is':' are')+' blocked by ROE constraints. ';
+  return'<div class="roe-banner"><span class="roe-banner-icon">&#x26D4;</span><div><b>ROE Alert:</b> '+esc(msg.trim())+'</div><span class="roe-banner-status">'+esc(String(auth.length))+' flagged</span></div>';
+}
+
+function coaColor(score) {
+  if (score >= 80) return '#22c55e';
+  if (score >= 60) return '#eab308';
+  return '#f97316';
+}
+
+function signedPctDelta(value) {
+  const pct = Math.round((Number(value) || 0) * 100);
+  return `${pct > 0 ? '+' : ''}${pct} pts`;
+}
+
+function supportContactsSummary() {
+  const contacts = state.contacts || [];
+  const alliedVessels = contacts.filter((contact) =>
+    !contact.is_hostile && contact.contact_type === 'vessel' && (contact.attributes?.allegiance || 'friendly') !== 'neutral'
+  ).length;
+  const alliedIsr = contacts.filter((contact) =>
+    !contact.is_hostile && contact.contact_type === 'uav' && (contact.attributes?.allegiance || 'friendly') !== 'neutral'
+  ).length;
+  return {alliedVessels, alliedIsr, total: alliedVessels + alliedIsr};
+}
+
+function assetSourceSummary() {
+  const explicitAssets = state.assets || [];
+  if (explicitAssets.length) {
+    const units = explicitAssets.reduce((sum, asset) => sum + Number(asset.quantity_available || 0), 0);
+    return tf('asset.explicit_source', 'Asset pool source: explicit engine inventory with {units} available unit(s) across {types} asset type(s).', {
+      units,
+      types: explicitAssets.length,
+    });
+  }
+  const support = supportContactsSummary();
+  return tf('asset.inferred_source', 'Asset pool source: inferred from active friendly contacts. Current inferred support: {vessels} allied vessel(s) and {isr} ISR/UAV support contact(s).', {
+    vessels: support.alliedVessels,
+    isr: support.alliedIsr,
+  });
+}
+
+function assignableAssetsSummary() {
+  const winner = state.coas?.[0];
+  const winnerCoa = winner?.coa || {};
+  return {
+    required: (winnerCoa.required_assets || []).length,
+    assigned: (winnerCoa.assigned_assets || []).length,
+    missing: (winnerCoa.missing_assets || []).length,
+  };
+}
+
+function recommendationDeltaHtml() {
+  const winner = state.coas?.[0];
+  if (!winner) return '';
+  const runnerUp = state.coas?.[1] || null;
+  const winnerCoa = winner.coa || {};
+  const winnerSim = winner.simulation || {};
+  const winnerTitle = localizedValue(winnerCoa, 'title', winnerCoa.title || winnerCoa.coa_id);
+  const assetText = assetSourceSummary();
+  const support = supportContactsSummary();
+  const assignable = assignableAssetsSummary();
+
+  if (!runnerUp) {
+    return `
+      <div class="coa-insight">
+        <h3>${esc(t('coa.why_won', 'Why This COA Won'))}</h3>
+        <p>${esc(assetText)}</p>
+        <p><b>${esc(t('coa.friendly_detected', 'Friendly contacts detected:'))}</b> ${esc(String(support.total))} (${esc(String(support.alliedVessels))} maritime, ${esc(String(support.alliedIsr))} ISR).</p>
+        <p><b>${esc(t('coa.assets_assignable', 'Assets assignable to top COA:'))}</b> ${esc(String(assignable.assigned))}/${esc(String(assignable.required))}${assignable.missing ? `, ${esc(t('coa.missing', 'Missing:').replace(':', ''))} ${esc(String(assignable.missing))}` : ''}.</p>
+        <p>${esc(t('coa.only_one_available', 'Only one scored COA is currently available, so there is no runner-up comparison yet.'))}</p>
+        ${roeRecommendationWarning(winnerCoa)}
+      </div>
+    `;
+  }
+
+  const runnerCoa = runnerUp.coa || {};
+  const runnerSim = runnerUp.simulation || {};
+  const assetDelta = Number(winnerCoa.feasibility_score || 0) - Number(runnerCoa.feasibility_score || 0);
+  const threatDelta = Number(winnerSim.success_probability || 0) - Number(runnerSim.success_probability || 0);
+  const infraDelta = (1 - Number(winnerSim.risk_to_second_cable || 0)) - (1 - Number(runnerSim.risk_to_second_cable || 0));
+
+  return `
+      <div class="coa-insight">
+      <h3>${esc(t('coa.why_won', 'Why This COA Won'))}</h3>
+      <p><b>${esc(t('coa.winner', 'Winner:'))}</b> ${esc(winnerTitle)} over ${esc(localizedValue(runnerCoa, 'title', runnerCoa.title || runnerCoa.coa_id))}.</p>
+      <p>${esc(assetText)}</p>
+      <p><b>${esc(t('coa.friendly_detected', 'Friendly contacts detected:'))}</b> ${esc(String(support.total))} (${esc(String(support.alliedVessels))} maritime, ${esc(String(support.alliedIsr))} ISR).</p>
+      <p><b>${esc(t('coa.assets_assignable', 'Assets assignable to top COA:'))}</b> ${esc(String(assignable.assigned))}/${esc(String(assignable.required))}${assignable.missing ? `, ${esc(t('coa.missing', 'Missing:').replace(':', ''))} ${esc(String(assignable.missing))}` : ''}.</p>
+      <div class="coa-deltas">
+        <div class="coa-delta">
+          <div class="coa-delta-lbl">${esc(t('coa.asset_support', 'Asset Support'))}</div>
+          <div class="coa-delta-val">${esc(signedPctDelta(assetDelta))}</div>
+          <div class="coa-delta-note">Winner feasibility ${fmtPct(winnerCoa.feasibility_score)}</div>
+        </div>
+        <div class="coa-delta">
+          <div class="coa-delta-lbl">${esc(t('coa.threat_handling', 'Threat Handling'))}</div>
+          <div class="coa-delta-val">${esc(signedPctDelta(threatDelta))}</div>
+          <div class="coa-delta-note">Winner success ${fmtPct(winnerSim.success_probability)}</div>
+        </div>
+        <div class="coa-delta">
+          <div class="coa-delta-lbl">${esc(t('coa.infra_protection', 'Infra Protection'))}</div>
+          <div class="coa-delta-val">${esc(signedPctDelta(infraDelta))}</div>
+          <div class="coa-delta-note">Winner cable safety ${fmtPct(1 - Number(winnerSim.risk_to_second_cable || 0))}</div>
+        </div>
+      </div>
+      ${roeRecommendationWarning(winnerCoa)}
+    </div>
+  `;
+}
+
+const TL_EVENT_LABELS = {
+  cable_severance: 'Cable Severance',
+  jamming: 'Jamming / EW',
+  course_change: 'Course Change',
+  hostile_intent: 'Hostile Intent',
+  surface: 'Submarine Surfaced',
+  slow_near_cable: 'Loitering Near Cable',
+  reposition: 'Reposition',
+  uav_detection: 'UAV Detection',
+  convoy_sighting: 'Convoy Sighting',
+};
+
+function humanizeAction(action) {
+  return TL_EVENT_LABELS[action] || (action || 'unknown').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function stimulusDescription(stim) {
+  const a = stim.action || 'unknown';
+  const entity = stim.entity || '';
+  const parts = [];
+  switch (a) {
+    case 'cable_severance':
+      parts.push('Undersea cable severed');
+      break;
+    case 'jamming':
+      parts.push('Electronic warfare jamming detected');
+      if (stim.radius_nm) parts.push(`radius ${stim.radius_nm} nm`);
+      break;
+    case 'course_change':
+      if (entity) parts.push(entity);
+      parts.push('changed heading');
+      if (stim.new_heading != null) parts.push(`to ${stim.new_heading}°`);
+      if (stim.new_speed != null) parts.push(`at ${stim.new_speed} kts`);
+      break;
+    case 'surface':
+      if (entity) parts.push(entity);
+      parts.push('surfaced');
+      if (stim.new_speed != null) parts.push(`at ${stim.new_speed} kts`);
+      break;
+    case 'slow_near_cable':
+      if (entity) parts.push(entity);
+      parts.push('loitering near cable');
+      if (stim.new_speed != null) parts.push(`at ${stim.new_speed} kts`);
+      break;
+    case 'reposition':
+      if (entity) parts.push(entity);
+      parts.push('repositioned');
+      if (stim.new_speed != null) parts.push(`speed ${stim.new_speed} kts`);
+      break;
+    case 'hostile_intent':
+      if (entity) parts.push(entity);
+      parts.push('flagged for hostile intent');
+      break;
+    case 'uav_detection':
+      if (entity) parts.push(entity);
+      parts.push('unmanned aerial vehicle detected');
+      break;
+    case 'convoy_sighting':
+      if (entity) parts.push(entity);
+      parts.push('convoy formation sighted');
+      break;
+    default:
+      if (entity) parts.push(entity);
+      parts.push(humanizeAction(a));
+  }
+  return parts.join(' ');
+}
+
+function renderTimelineSection(title, items, statusClass, hdrClass, rowClass) {
+  if (!items.length) return '';
+  const rows = items.map(s => {
+    const action = s.action || 'unknown';
+    const ent = s.entity || '';
+    const desc = stimulusDescription(s);
+    return `<div class="tl-row ${rowClass}">
+      <span class="tl-tick">T${s.tick ?? '--'}</span>
+      <span class="tl-act ${esc(action)}">${esc(humanizeAction(action))}</span>
+      <span class="tl-desc">${esc(desc)}</span>
+      ${ent ? `<span class="tl-ent">${esc(ent)}</span>` : ''}
+      <span class="tl-status ${statusClass}">${statusClass === 'fired' ? 'Fired' : statusClass === 'active' ? 'Active' : 'Upcoming'}</span>
+    </div>`;
+  }).join('');
+  return `<div class="tl-section">
+    <div class="tl-section-hdr ${hdrClass}">${esc(title)} <span class="tl-section-cnt">${items.length}</span></div>
+    ${rows}
+  </div>`;
+}
+
+function renderTimeline(info, stimuli) {
+  const metaEl = document.getElementById('scn-meta');
+  const listEl = document.getElementById('tl-list');
+  if (!metaEl || !listEl) return;
+
+  if (!info || info.status === 'no_scenario_loaded') {
+    metaEl.innerHTML = '';
+    listEl.innerHTML = `<div class="empty">${esc(t('timeline.empty', 'Start a scenario to see the stimuli timeline'))}</div>`;
+    return;
+  }
+
+  const meta = info.metadata || {};
+  const seed = info.seed != null ? info.seed : (meta.seed || '--');
+  const env = info.environment || meta.environment || {};
+
+  metaEl.innerHTML = `
+    <div class="si-pair"><span class="si-lbl">Scenario</span><span class="si-val">${esc(meta.display_name || meta.scenario_id || state.scenario)}</span></div>
+    <span class="si-sep">|</span>
+    <div class="si-pair"><span class="si-lbl">Tick</span><span class="si-val">${esc(String(info.tick ?? state.tick))}</span></div>
+    <span class="si-sep">|</span>
+    <div class="si-pair"><span class="si-lbl">Scenario Seed</span><span class="si-val">${esc(String(seed))}</span></div>
+    <span class="si-sep">|</span>
+    <div class="si-pair"><span class="si-lbl">Entities</span><span class="si-val">${esc(String(meta.entity_count ?? '--'))}</span></div>
+    <span class="si-sep">|</span>
+    <div class="si-pair"><span class="si-lbl">Threat</span><span class="si-val">${esc(meta.initial_threat_level || '--')}</span></div>
+  `;
+
+  const envParts = [];
+  if (env.sea_state != null) envParts.push(`<div class="tl-env-item"><span class="tl-env-lbl">Sea State</span><span class="tl-env-val">${esc(String(env.sea_state))}</span></div>`);
+  if (env.visibility) envParts.push(`<div class="tl-env-item"><span class="tl-env-lbl">Visibility</span><span class="tl-env-val">${esc(String(env.visibility))}</span></div>`);
+  if (env.time_of_day) envParts.push(`<div class="tl-env-item"><span class="tl-env-lbl">Time</span><span class="tl-env-val">${esc(String(env.time_of_day))}</span></div>`);
+  if (env.ice_cover) envParts.push(`<div class="tl-env-item"><span class="tl-env-lbl">Ice</span><span class="tl-env-val">${esc(String(env.ice_cover))}</span></div>`);
+
+  const fired = stimuli ? (stimuli.fired || []) : [];
+  const active = stimuli ? (stimuli.active || []) : [];
+  const upcoming = stimuli ? (stimuli.upcoming || []) : [];
+
+  listEl.innerHTML = `
+    ${envParts.length ? `<div class="tl-env">${envParts.join('')}</div>` : ''}
+    ${renderTimelineSection(t('timeline.fired', 'Fired Events'), fired, 'fired', 'fired-hdr', 'tl-row-fired')}
+    ${renderTimelineSection(t('timeline.active', 'Currently Active'), active, 'active', 'active-hdr', 'tl-row-active')}
+    ${renderTimelineSection(t('timeline.upcoming', 'Upcoming Events'), upcoming, 'upcoming', 'upcoming-hdr', '')}
+    ${!fired.length && !active.length && !upcoming.length ? `<div class="empty">${esc(t('timeline.no_stimuli', 'No stimuli scheduled yet'))}</div>` : ''}
+  `;
+}
+
+async function fetchTimelineData() {
+  try {
+    const [info, stimuli] = await Promise.all([
+      api('/v1/engine/scenario/info').catch(() => null),
+      api('/v1/engine/scenario/stimuli').catch(() => null),
+    ]);
+    renderTimeline(info, stimuli);
+  } catch (_) {}
+}
+
+let queryBusy = false;
+
+async function submitQuery(question) {
+  const input = document.getElementById('query-input');
+  const btn = document.getElementById('query-ask-btn');
+  const responseEl = document.getElementById('query-response');
+  if (!question && input) question = input.value;
+  if (!question || !question.trim()) return;
+  question = question.trim();
+  if (input) input.value = question;
+  if (queryBusy) return;
+  queryBusy = true;
+  if (btn) btn.disabled = true;
+  if (responseEl) responseEl.innerHTML = `<div class="query-busy">${esc(t('query.busy', 'Thinking...'))}</div>`;
+  try {
+    await refreshLlmStatus();
+    const result = await api('/v1/engine/query', {
+      method: 'POST',
+      body: JSON.stringify({
+        question,
+        ui_language_hint: state.uiLanguage || 'en',
+      }),
+    });
+    renderQueryResponse(result, question);
+    await refreshLlmStatus();
+  } catch (err) {
+    if (responseEl) responseEl.innerHTML = `<div class="query-response-card"><p class="query-answer" style="color:#f87171">${esc(t('query.error', 'Error'))}: ${esc(err.message)}</p></div>`;
+  } finally {
+    queryBusy = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderQueryResponse(result, question) {
+  const el = document.getElementById('query-response');
+  if (!el) return;
+  const answer = result.answer || t('query.no_answer', 'No answer returned.');
+  const sources = result.sources_used || [];
+  const llmUsed = result.llm_used || false;
+  const forecast = result.forecast || null;
+  const trendLabel = forecast?.expected_threat_trend ? t(`query.trend.${forecast.expected_threat_trend}`, forecast.expected_threat_trend) : '--';
+
+  const llmTag = llmUsed
+    ? `<span class="query-meta-tag tag-llm">&#x1F9E0; ${esc(t('query.meta.llm', 'LLM-assisted'))}</span>`
+    : `<span class="query-meta-tag tag-deterministic">&#x2699;&#xFE0F; ${esc(t('query.meta.deterministic', 'Deterministic'))}</span>`;
+  const forecastTag = forecast
+    ? `<span class="query-meta-tag tag-forecast">&#x1F52E; ${esc(t('query.meta.forecast', 'Forecast / What-if'))}</span>`
+    : '';
+  const fallbackTag = result.fallback_reason
+    ? `<span class="query-meta-tag tag-fallback">${esc(t('query.meta.fallback', 'Fallback'))}: ${esc(result.fallback_reason)}</span>`
+    : '';
+
+  let forecastHtml = '';
+  if (forecast) {
+    const trendIcon = {increase: '&#x2B06;', decrease: '&#x2B07;', stable: '&#x27A1;'}[forecast.expected_threat_trend] || '';
+    const trendColor = {increase: '#f87171', decrease: '#4ade80', stable: '#facc15'}[forecast.expected_threat_trend] || '#e2e8f0';
+    const risks = (forecast.key_risks || []).map(r => `<li>${esc(r)}</li>`).join('');
+    const stimuli = (forecast.stimuli_fired || []).map(s => `<li>${esc(s)}</li>`).join('');
+    const trendStart = forecast.threat_level_start || '--';
+    const trendEnd = forecast.threat_level_end || '--';
+    const conf = (forecast.confidence || 'medium').charAt(0).toUpperCase() + (forecast.confidence || 'medium').slice(1);
+    forecastHtml = `
+      <div class="query-forecast-card">
+        <div class="query-forecast-hdr"><span>&#x1F52E;</span> ${esc(t('query.forecast_results', 'Forecast Results'))}</div>
+        <div class="query-forecast-body">
+          <p>${esc(forecast.expected_outcome || forecast.summary || '')}</p>
+          <div class="query-forecast-grid">
+            <div class="query-forecast-metric"><div class="qfm-lbl">${esc(t('query.forecast.threat_trend', 'Threat Trend'))}</div><div class="qfm-val" style="color:${trendColor}">${trendIcon} ${esc(trendLabel)}</div></div>
+            <div class="query-forecast-metric"><div class="qfm-lbl">${esc(t('query.forecast.confidence', 'Confidence'))}</div><div class="qfm-val">${esc(conf)}</div></div>
+            <div class="query-forecast-metric"><div class="qfm-lbl">${esc(t('query.forecast.threat_level', 'Threat Level'))}</div><div class="qfm-val">${esc(trendStart)} &#x2192; ${esc(trendEnd)}</div></div>
+            <div class="query-forecast-metric"><div class="qfm-lbl">${esc(t('query.forecast.contacts', 'Contacts'))}</div><div class="qfm-val">${esc(String(forecast.contacts_start ?? '--'))} &#x2192; ${esc(String(forecast.contacts_end ?? '--'))}</div></div>
+            <div class="query-forecast-metric"><div class="qfm-lbl">${esc(t('query.forecast.horizon', 'Horizon'))}</div><div class="qfm-val">${esc(String(forecast.tick_horizon ?? '--'))} ${esc(t('query.forecast.ticks', 'ticks'))}</div></div>
+          </div>
+          ${risks ? `<div class="query-forecast-risks"><b style="font-size:10px;color:#fbbf24">${esc(t('query.forecast.key_risks', 'Key Risks:'))}</b><ul style="padding-left:16px">${risks}</ul></div>` : ''}
+          ${stimuli ? `<div style="margin-top:4px"><b style="font-size:10px;color:#94a3b8">${esc(t('query.forecast.stimuli_fired', 'Stimuli Fired:'))}</b><ul style="padding-left:16px;font-size:9px;color:#94a3b8">${stimuli}</ul></div>` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  const sourcesHtml = sources.length
+    ? `<div class="query-sources"><b>${esc(t('query.sources', 'Sources:'))}</b> ${sources.map(s => esc(s)).join(', ')}</div>`
+    : '';
+
+  el.innerHTML = `
+    <div class="query-response-card">
+      <div class="query-answer">${esc(answer)}</div>
+      <div class="query-meta">${llmTag} ${forecastTag} ${fallbackTag}</div>
+      ${sourcesHtml}
+      ${forecastHtml}
+    </div>
+  `;
+}
+
+function renderLlmIndicator() {
+  const el = document.getElementById('llm-indicator');
+  if (!el) return;
+  const status = state.llmStatus || {};
+  const queueText = `Queue: ${status.queue_length || 0}`;
+  const taskText = status.current_task_type ? ` (${status.current_task_type})` : '';
+  if (status.last_error) {
+    el.className = 'llm-indicator error';
+    el.textContent = `${t('llm.last_error', 'Last LLM error')}: ${status.last_error}`;
+    return;
+  }
+  if (status.busy) {
+    el.className = 'llm-indicator working';
+    el.textContent = `${t('llm.working', 'LLM working...')}${taskText} · ${queueText}`;
+    return;
+  }
+  if ((status.queue_length || 0) > 0) {
+    el.className = 'llm-indicator queued';
+    el.textContent = `${t('llm.queue', 'LLM queue')}: ${status.queue_length} ${t('llm.pending', 'pending')}${taskText}`;
+    return;
+  }
+  el.className = 'llm-indicator idle';
+  el.textContent = `${t('llm.idle', 'LLM idle')} · ${queueText}`;
+}
+
+function renderEventSummary() {
+  const el = document.getElementById('event-summary-body');
+  if (!el) return;
+  const summary = state.latestEventSummary;
+  const status = state.llmStatus || {};
+  const queueInfo = `${status.current_task_type || 'idle'} · queue ${status.queue_length || 0}`;
+  if (!summary || !summary.summary_text) {
+    el.innerHTML = `<div class="empty">${esc(t('event_summary.empty', 'No significant event summary yet.'))}</div><div class="esp-detail">${esc(queueInfo)}</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="esp-meta">
+      <span class="esp-chip lang">${esc(t('event_summary.tick', 'Tick'))}: ${esc(String(summary.tick || '--'))}</span>
+      <span class="esp-chip lang">${esc(t('event_summary.type', 'Event'))}: ${esc(summary.event_type || '--')}</span>
+      <span class="esp-chip ${summary.llm_used ? 'ok' : 'fail'}">${esc(t('event_summary.status', 'LLM status'))}: ${esc(summary.llm_used ? t('event_summary.generated', 'Generated') : t('event_summary.failed', 'Fallback'))}</span>
+      <span class="esp-chip lang">${esc(t('event_summary.language', 'Language'))}: ${esc(summary.language_used || 'en')}</span>
+    </div>
+    <div>${esc(summary.summary_text)}</div>
+    <div class="esp-detail">task=${esc(status.current_task_type || 'idle')} · queue=${esc(String(status.queue_length || 0))}</div>
+    ${summary.fallback_reason ? `<div class="esp-detail">${esc(t('event_summary.fallback', 'Fallback reason'))}: ${esc(summary.fallback_reason)}</div>` : ''}
+  `;
+}
+
+function syncVisibilityControls() {
+  const mapping = [
+    ['toggle-live-ais', state.show_ais],
+    ['toggle-combat-contacts', state.show_combat_contacts],
+    ['toggle-sim-entities', state.show_sim_entities],
+  ];
+  mapping.forEach(([id, value]) => {
+    const node = document.getElementById(id);
+    if (node && node.checked !== Boolean(value)) node.checked = Boolean(value);
+  });
+  state.showAis = state.show_ais;
+}
+
+function syncCombatControls() {
+  const scenario = state.lastState?.scenario || {};
+  const enabled = scenario.combat_contacts_enabled ?? false;
+  const density = scenario.combat_contacts_density || 'medium';
+  const scenarioType = scenario.combat_contacts_scenario_type || 'mixed_traffic';
+  const enabledNode = document.getElementById('combat-feed-enabled');
+  const densityNode = document.getElementById('combat-feed-density');
+  const scenarioNode = document.getElementById('combat-feed-scenario');
+  if (enabledNode && enabledNode.checked !== Boolean(enabled)) enabledNode.checked = Boolean(enabled);
+  if (densityNode && densityNode.value !== density) densityNode.value = density;
+  if (scenarioNode && scenarioNode.value !== scenarioType) scenarioNode.value = scenarioType;
+  const banner = document.getElementById('combat-feed-status');
+  if (banner) {
+    banner.textContent = enabled ? t('sim.combat_feed_enabled', 'Combat feed enabled') : t('sim.combat_feed_disabled', 'Combat feed disabled');
+  }
+}
+
+async function refreshLlmStatus() {
+  try {
+    const status = await api('/v1/engine/llm/status');
+    state.llmStatus = status || {};
+    if (status?.last_summary) state.latestEventSummary = status.last_summary;
+  } catch (_) {}
+  renderLlmIndicator();
+  renderEventSummary();
+}
+
+function initQueryHandlers() {
+  const btn = document.getElementById('query-ask-btn');
+  const input = document.getElementById('query-input');
+  if (btn) btn.addEventListener('click', () => submitQuery());
+  if (input) {
+    input.addEventListener('keydown', (evt) => {
+      if (evt.key === 'Enter') { evt.preventDefault(); submitQuery(); }
+    });
+  }
+  document.querySelectorAll('.query-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const q = chip.getAttribute('data-q') || '';
+      if (input) input.value = q;
+      submitQuery(q);
+    });
+  });
+}
+
+function renderCoas() {
+  const tabCount = document.getElementById('tab-co');
+  if (tabCount) tabCount.textContent = state.coas.length;
+  const container = document.getElementById('co-list');
+  if (!container) return;
+  if (!state.coas.length) {
+    container.innerHTML = `<div class="empty">${esc(t('coas.empty', 'Awaiting analysis'))}</div>`;
+    return;
+  }
+  container.innerHTML = roeBannerHtml(state.coas) + recommendationDeltaHtml() + state.coas.map((item) => {
+    const coa = item.coa || {};
+    const sim = item.simulation || {};
+    const expanded = state.expandedCoaId === coa.coa_id;
+    const assumptions = (localizedValue(coa, 'assumptions', coa.assumptions) || []).map((a) => `<li>${esc(a)}</li>`).join('');
+    const coaTitle = localizedValue(coa, 'title', coa.title || coa.coa_id);
+    const coaDescription = localizedValue(coa, 'description', coa.description || '');
+    const coaExpectedEffect = localizedValue(coa, 'expected_effect', coa.expected_effect || '');
+    const missing = (coa.missing_assets || []).length ? `<p>${esc(t('coa.missing', 'Missing:'))} ${esc(coa.missing_assets.join(', '))}</p>` : `<p>${esc(t('coa.missing', 'Missing:'))} ${esc(t('common.none_short', 'None'))}</p>`;
+    return `
+      <div class="coa-card ${item.rank === 1 ? 'rank1' : ''} ${expanded ? 'expanded' : ''} ${roeCardClass(coa)}" data-coa-id="${esc(coa.coa_id)}">
+        <div class="coa-hdr">
+          <div class="coa-title">${esc(coaTitle)}</div>
+          <div class="coa-score">${esc(item.total_score?.toFixed?.(1) ?? item.total_score)}</div>
+          <div class="${roeStatusClass(coa)}">${roeStatusLabel(coa)}</div>
+          <div class="coa-expand-hint">▾</div>
+        </div>
+        ${roeReasonStrip(coa)}
+        <div class="coa-bar"><div class="coa-bar-fill" style="width:${Math.max(0, Math.min(100, Number(item.total_score) || 0))}%;background:${coaColor(Number(item.total_score) || 0)}"></div></div>
+        <div class="coa-metrics">
+          <span>Success ${fmtPct(sim.success_probability)}</span>
+          <span>Escalation ${fmtPct(sim.escalation_probability)}</span>
+          <span>Feasibility ${fmtPct(coa.feasibility_score)}</span>
+        </div>
+        <div class="coa-detail">
+          <p>${esc(coaDescription)}</p>
+          <p><b>${esc(t('coa.expected_effect', 'Expected Effect:'))}</b> ${esc(coaExpectedEffect)}</p>
+          <div class="roe-detail-section ${coa.roe_status === 'allowed' ? 'roe-ok' : 'roe-warn'}">
+            <p class="roe-detail-title">${coa.roe_status === 'allowed' ? '&#x2713; ROE: Cleared' : '&#x26A0; ROE: ' + esc(coa.roe_status || 'Unknown')}</p>
+            ${coa.roe_reason ? '<p class="roe-detail-reason">' + esc(coa.roe_reason) + '</p>' : ''}
+            ${(coa.roe_constraints_triggered || []).length ? '<p class="roe-detail-constraints">Constraints: ' + esc((coa.roe_constraints_triggered || []).join(', ')) + '</p>' : ''}
+          </div>
+          <p><b>${esc(t('coa.tradeoff', 'Trade-off:'))}</b> ${esc(item.tradeoff_explanation || '')}</p>
+          ${missing}
+          <p><b>${esc(t('coa.assumptions', 'Assumptions:'))}</b></p>
+          <ul>${assumptions || `<li>${esc(t('common.none_short', 'None'))}</li>`}</ul>
+        </div>
+      </div>
+    `;
+  }).join('');
+  const recommendation = state.recommendation || {};
+  const pkg = recommendation.recommended_package || null;
+  if (pkg) {
+    const tasks = (pkg.plan?.tasks || []).map((task) => `
+      <li><b>${esc(localizedValue(task, 'title', task.title))}</b> (${esc(task.task_type)}) · start +${esc(task.start_offset_min)} min · ${esc(task.duration_min)} min · assets: ${esc((task.assigned_assets || []).join(', ') || 'none')}</li>
+    `).join('');
+    const deps = (pkg.plan?.dependencies || []).map((dep) => `
+      <li>${esc(dep.predecessor_task_id)} → ${esc(dep.successor_task_id)} (${esc(dep.dependency_type)})${localizedValue(dep, 'condition', dep.condition) ? `: ${esc(localizedValue(dep, 'condition', dep.condition))}` : ''}</li>
+    `).join('');
+    const packageSummary = localizedValue(pkg.plan, 'summary', pkg.plan?.summary || 'Coordinated bundle across multiple advisory actions.');
+    container.innerHTML = `
+      <div class="coa-card rank1 expanded" style="border-left-color:#8b5cf6;background:#171534">
+        <div class="coa-hdr">
+          <div class="coa-title">${esc(t('coa.recommended_bundle', 'Recommended Bundle'))} ${esc(pkg.package_id)}</div>
+          <div class="coa-score">${esc(Number(pkg.total_score || 0).toFixed(1))}</div>
+        </div>
+        <div class="coa-bar"><div class="coa-bar-fill" style="width:${Math.max(0, Math.min(100, Number(pkg.total_score) || 0))}%;background:#8b5cf6"></div></div>
+        <div class="coa-metrics">
+          <span>Feasibility ${fmtPct(pkg.feasibility_score)}</span>
+          <span>COAs ${esc((pkg.coas || []).length)}</span>
+          <span>Reserved Assets ${esc((pkg.combined_assets || []).length)}</span>
+        </div>
+        <div class="coa-detail" style="display:block">
+          <p>${esc(packageSummary || 'Coordinated bundle across multiple advisory actions.')}</p>
+          <p><b>${esc(t('coa.plain_meaning', 'Plain meaning:'))}</b> ${esc(t('coa.plain_meaning_text', 'this is a bundle of several COAs that the allocator thinks can run together without overusing the same assets.'))}</p>
+          <p><b>${esc(t('coa.member_coas', 'Member COAs:'))}</b> ${esc((pkg.coas || []).map((entry) => localizedValue(entry.coa, 'title', entry.coa?.title || entry.coa?.coa_id || 'unknown')).join(' | '))}</p>
+          <p><b>${esc(t('coa.planned_tasks', 'Planned Tasks:'))}</b></p>
+          <ul>${tasks || `<li>${esc(t('common.none_short', 'None'))}</li>`}</ul>
+          <p><b>${esc(t('coa.dependencies', 'Dependencies:'))}</b></p>
+          <ul>${deps || `<li>${esc(t('common.none_short', 'None'))}</li>`}</ul>
+        </div>
+      </div>
+    ` + container.innerHTML;
+  }
+}
+
+function renderBriefing() {
+  const body = document.getElementById('bf-body');
+  const briefing = state.briefing;
+  if (!briefing) {
+    body.innerHTML = `<div class="empty">${esc(t('briefing.empty', 'Click Generate Briefing to produce commander assessment'))}</div>`;
+    return;
+  }
+  const confidence = String(briefing.confidence || 'LOW').toLowerCase();
+  const assessmentHtml = `${formatParagraphs(briefing.assessment)}${briefing.entity_risk_narratives ? formatBulletList(Object.entries(briefing.entity_risk_narratives).map(([entity, text]) => `${entity}: ${text}`)) : ''}`;
+  const recentDevelopments = (briefing.recent_developments && briefing.recent_developments.length)
+    ? briefing.recent_developments
+    : ((briefing.what_changed && briefing.what_changed.length) ? briefing.what_changed : briefing.key_indicators);
+  body.innerHTML = `
+    <div class="bf-top">
+      <div class="bf-hero">
+        <div class="bf-kicker">${esc(t('briefing.commander_summary', 'Commander Summary'))}</div>
+        <div class="bf-title">${esc(briefing.recommended_coa || t('briefing.recommendation_pending', 'Recommendation pending'))}</div>
+        <div class="bf-sub">${esc(t('briefing.primary_recommendation', 'Primary recommended course of action based on the latest operational picture.'))}</div>
+      </div>
+      <div class="bf-side">
+        <div class="bf-metric">
+          <div class="bf-metric-label">${esc(t('briefing.assessment_confidence', 'Assessment Confidence'))}</div>
+          <div class="bf-metric-value"><span class="bf-badge ${esc(confidence)}">${esc(briefing.confidence || 'LOW')}</span></div>
+        </div>
+        <div class="bf-metric">
+          <div class="bf-metric-label">${esc(t('briefing.coas_considered_count', 'COAs Considered'))}</div>
+          <div class="bf-metric-value">${esc((briefing.coas_considered || []).length)}</div>
+        </div>
+      </div>
+    </div>
+    <div class="bf-grid">
+      <div class="bf-sec">
+        <h3>${esc(t('briefing.situation', 'Situation'))}</h3>
+        ${formatParagraphs(briefing.situation)}
+      </div>
+      <div class="bf-sec">
+        <h3>${esc(t('briefing.recent_developments', 'Recent Developments'))}</h3>
+        ${formatBulletList(recentDevelopments)}
+      </div>
+    </div>
+    <div class="bf-sec">
+      <h3>${esc(t('briefing.assessment', 'Assessment'))}</h3>
+      ${assessmentHtml}
+    </div>
+    <div class="bf-sec">
+      <h3>${esc(t('briefing.key_actors', 'Key Actors'))}</h3>
+      ${formatBulletList(briefing.key_actors)}
+    </div>
+    ${briefing.enriched_assessment ? `
+      <div class="bf-highlight">
+        <h3>${esc(t('briefing.enriched_assessment', 'LLM Enriched Assessment'))}</h3>
+        ${formatParagraphs(briefing.enriched_assessment)}
+      </div>` : ''}
+    <div class="bf-grid">
+      <div class="bf-sec">
+        <h3>${esc(t('briefing.recommended_coa', 'Recommended Course of Action'))}</h3>
+        ${formatParagraphs(briefing.recommended_coa)}
+      </div>
+      <div class="bf-sec">
+        <h3>${esc(t('briefing.roe_status', 'ROE Status'))}</h3>
+        ${formatParagraphs(briefing.roe_status || '')}
+      </div>
+    </div>
+    <div class="bf-grid">
+      <div class="bf-sec">
+        <h3>${esc(t('briefing.coas_considered_count', 'COAs Considered'))}</h3>
+        ${formatBulletList(briefing.coas_considered)}
+      </div>
+      <div class="bf-sec">
+        <h3>${esc(t('briefing.risks_next', 'Risks And Next Developments'))}</h3>
+        ${formatBulletList(briefing.risks)}
+      </div>
+    </div>
+    <div class="bf-sec">
+      <h3>${esc(t('briefing.assumptions', 'Assumptions'))}</h3>
+      ${formatBulletList(briefing.assumptions)}
+    </div>
+    ${(briefing.fallback_reason || briefing.language_used) ? `<div class="bf-sec"><h3>LLM</h3><p>language=${esc(briefing.language_used || 'en')} · llm_used=${esc(String(Boolean(briefing.llm_used)))}${briefing.fallback_reason ? ` · fallback=${esc(briefing.fallback_reason)}` : ''}</p></div>` : ''}
+  `;
+}
+
+function getUnitDraft(contact) {
+  if (!state.editDrafts[contact.entity_id]) {
+    state.editDrafts[contact.entity_id] = {
+      name: contact.attributes?.name || contact.entity_id,
+      contact_type: contact.contact_type,
+      allegiance: contact.attributes?.allegiance || (contact.is_hostile ? 'hostile' : 'friendly'),
+      speed: String(contact.speed ?? 0),
+      heading: String(contact.heading ?? 0),
+      lat: String(contact.lat ?? ''),
+      lon: String(contact.lon ?? ''),
+      ais_off: Boolean(contact.attributes?.ais_off),
+    };
+  }
+  return state.editDrafts[contact.entity_id];
+}
+
+function getActionDraft(entityId) {
+  if (!state.actionDrafts[entityId]) {
+    state.actionDrafts[entityId] = {action: 'suspicious_maneuver', execute_tick: '', new_heading: '', new_speed: '', lat: '', lon: '', radius_nm: '20'};
+  }
+  return state.actionDrafts[entityId];
+}
+
+function renderSimulator() {
+  syncSimInputs();
+  const toggle = document.getElementById('sim-toggle');
+  const advToggle = document.getElementById('sim-adv-toggle');
+  const form = document.getElementById('sim-form');
+  toggle.style.display = 'block';
+  advToggle.textContent = state.simAdvanced ? t('sim.hide_advanced', 'Hide Advanced Placement') : t('sim.show_advanced', 'Show Advanced Placement');
+  toggle.textContent = state.mapInteractionMode === 'add' ? t('sim.cancel_map_placement', 'Cancel Map Placement') : t('sim.place_unit', 'Place Unit on Map');
+  form.style.display = state.simAdvanced && state.simMode ? 'grid' : 'none';
+  renderMapModeBanner();
+  const contacts = activeContacts().slice().sort((a, b) => (a.attributes?.name || a.entity_id).localeCompare(b.attributes?.name || b.entity_id));
+  const container = document.getElementById('sim-units');
+  if (!contacts.length) {
+    container.innerHTML = `<div class="empty">${esc(t('sim.no_units', 'No units available'))}</div>`;
+    return;
+  }
+  container.innerHTML = contacts.map((contact) => {
+    const attrs = contact.attributes || {};
+    const source = contactSource(contact);
+    const editOpen = state.editOpenFor === contact.entity_id;
+    const actionOpen = state.actionOpenFor === contact.entity_id;
+    const draft = getUnitDraft(contact);
+    const actionDraft = getActionDraft(contact.entity_id);
+    const queue = state.scheduledActions[contact.entity_id] || [];
+    return `
+      <div class="sim-unit ${state.selectedEntityId === contact.entity_id && state.selectedContactSource === source ? 'su-selected' : ''}">
+        <div class="su-top">
+          <div class="su-name">${esc(attrs.name || contact.entity_id)}</div>
+          <div class="su-meta">${esc(contact.contact_type)} · ${esc(source)} | ${esc(contact.speed)} kts | ${esc(contact.heading)}° | ${esc(fmtLatLon(contact.lat, contact.lon))}</div>
+          <button class="su-del" data-action="delete-unit" data-entity="${esc(contact.entity_id)}">Delete</button>
+        </div>
+        <div class="su-actions">
+          <button data-action="select-unit" data-entity="${esc(contact.entity_id)}">Select</button>
+          <button data-action="move-unit" data-entity="${esc(contact.entity_id)}">${esc(t('sim.move_unit', 'Move'))}</button>
+          <button data-action="toggle-edit" data-entity="${esc(contact.entity_id)}">${editOpen ? 'Close Edit' : 'Edit'}</button>
+          <button data-action="prefill-action" data-entity="${esc(contact.entity_id)}" data-kind="suspicious_maneuver">Suspicious Turn</button>
+          <button data-action="prefill-action" data-entity="${esc(contact.entity_id)}" data-kind="approach_point">Approach Point</button>
+          <button data-action="prefill-action" data-entity="${esc(contact.entity_id)}" data-kind="jamming">Jamming</button>
+          <button data-action="prefill-action" data-entity="${esc(contact.entity_id)}" data-kind="attack_run">Attack Run</button>
+          <button data-action="prefill-action" data-entity="${esc(contact.entity_id)}" data-kind="ais_off">AIS Off</button>
+        </div>
+        ${state.simulatorNotes[contact.entity_id] ? `<div class="su-note">${esc(state.simulatorNotes[contact.entity_id])}</div>` : ''}
+        ${queue.length ? `<ul class="su-queue">${queue.map((item) => `<li>Tick ${esc(item.tick)}: ${esc(item.action)}</li>`).join('')}</ul>` : ''}
+        ${editOpen ? `
+          <div class="su-edit" data-entity="${esc(contact.entity_id)}">
+            <div><label>Name</label><input data-field="name" value="${esc(draft.name)}"></div>
+            <div><label>Type</label><select data-field="contact_type"><option value="vessel"${draft.contact_type === 'vessel' ? ' selected' : ''}>Vessel</option><option value="uav"${draft.contact_type === 'uav' ? ' selected' : ''}>UAV</option><option value="submarine"${draft.contact_type === 'submarine' ? ' selected' : ''}>Submarine</option><option value="convoy"${draft.contact_type === 'convoy' ? ' selected' : ''}>Convoy</option></select></div>
+            <div><label>Allegiance</label><select data-field="allegiance"><option value="hostile"${draft.allegiance === 'hostile' ? ' selected' : ''}>Hostile</option><option value="friendly"${draft.allegiance === 'friendly' ? ' selected' : ''}>Friendly</option><option value="neutral"${draft.allegiance === 'neutral' ? ' selected' : ''}>Neutral</option></select></div>
+            <div><label>AIS</label><select data-field="ais_off"><option value="false"${!draft.ais_off ? ' selected' : ''}>On</option><option value="true"${draft.ais_off ? ' selected' : ''}>Off</option></select></div>
+            <div><label>Speed</label><input data-field="speed" type="number" step="0.1" value="${esc(draft.speed)}"></div>
+            <div><label>Heading</label><input data-field="heading" type="number" step="1" value="${esc(draft.heading)}"></div>
+            <div><label>Latitude</label><input data-field="lat" type="number" step="0.0001" value="${esc(draft.lat)}"></div>
+            <div><label>Longitude</label><input data-field="lon" type="number" step="0.0001" value="${esc(draft.lon)}"></div>
+            <div class="su-edit-btns full"><button class="su-save" data-action="save-edit" data-entity="${esc(contact.entity_id)}">Save</button><button class="su-cancel" data-action="toggle-edit" data-entity="${esc(contact.entity_id)}">Cancel</button></div>
+          </div>` : ''}
+        ${actionOpen ? `
+          <div class="su-action" data-entity="${esc(contact.entity_id)}">
+            <div><label>Action</label><select data-field="action"><option value="suspicious_maneuver"${actionDraft.action === 'suspicious_maneuver' ? ' selected' : ''}>Suspicious Maneuver</option><option value="course_change"${actionDraft.action === 'course_change' ? ' selected' : ''}>Course Change</option><option value="approach_point"${actionDraft.action === 'approach_point' ? ' selected' : ''}>Approach Point</option><option value="speed_burst"${actionDraft.action === 'speed_burst' ? ' selected' : ''}>Speed Burst</option><option value="jamming"${actionDraft.action === 'jamming' ? ' selected' : ''}>Jamming</option><option value="attack_run"${actionDraft.action === 'attack_run' ? ' selected' : ''}>Attack Run</option><option value="ais_off"${actionDraft.action === 'ais_off' ? ' selected' : ''}>AIS Off</option></select></div>
+            <div><label>Execute at Tick</label><input data-field="execute_tick" type="number" min="1" value="${esc(actionDraft.execute_tick)}" placeholder="Next"></div>
+            <div><label>Heading</label><input data-field="new_heading" type="number" step="1" value="${esc(actionDraft.new_heading)}"></div>
+            <div><label>Speed</label><input data-field="new_speed" type="number" step="0.1" value="${esc(actionDraft.new_speed)}"></div>
+            <div><label>Lat</label><input data-field="lat" type="number" step="0.0001" value="${esc(actionDraft.lat)}"></div>
+            <div><label>Lon</label><input data-field="lon" type="number" step="0.0001" value="${esc(actionDraft.lon)}"></div>
+            <div class="full"><label>Jamming Radius (nm)</label><input data-field="radius_nm" type="number" step="1" value="${esc(actionDraft.radius_nm)}"></div>
+            <div class="su-action-btns full"><button class="su-action-go" data-action="run-action" data-entity="${esc(contact.entity_id)}">Apply / Schedule</button><button class="su-cancel" data-action="close-action" data-entity="${esc(contact.entity_id)}">Close</button></div>
+          </div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+function simulatorBusy() {
+  const active = document.activeElement;
+  if (!active) return false;
+  return Boolean(active.closest('#sim-form') || active.closest('.su-edit') || active.closest('.su-action'));
+}
+
+function syncSimInputs() {
+  const mapping = [['si-name', 'name'], ['si-type', 'type'], ['si-ally', 'ally'], ['si-spd', 'speed'], ['si-hdg', 'heading'], ['si-lat', 'lat'], ['si-lon', 'lon'], ['si-rad', 'radius_nm'], ['si-ais', 'ais_off']];
+  mapping.forEach(([id, key]) => {
+    const el = document.getElementById(id);
+    if (el && document.activeElement !== el) el.value = state.simDraft[key] ?? '';
+  });
+  const pos = document.getElementById('si-pos');
+  if (pos) pos.value = state.simDraft.lat && state.simDraft.lon ? fmtLatLon(state.simDraft.lat, state.simDraft.lon) : t('sim.click_map', 'Click on map to place unit');
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    headers: {'Content-Type': 'application/json'},
+    ...options,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = payload.message || payload.detail || `HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  return payload;
+}
+
+async function ensureBriefing(language, {render = true, log = false} = {}) {
+  const lang = language || document.getElementById('briefing-lang')?.value || state.briefingLanguage || 'en';
+  await refreshLlmStatus();
+  const result = await api(`/v1/engine/briefing?lang=${encodeURIComponent(lang)}`);
+  if (result.briefing) {
+    result.briefing.language = lang;
+    state.briefing = result.briefing;
+    state.briefingLanguage = lang;
+    if (render) renderBriefing();
+    document.getElementById('btn-pdf').style.display = 'inline-block';
+    document.getElementById('btn-pdf-en').style.display = 'inline-block';
+    if (log) logLine(t('briefing.generated', 'Briefing generated'));
+    await refreshLlmStatus();
+    return result.briefing;
+  }
+  throw new Error('Briefing unavailable');
+}
+
+async function applyUiLanguage(language, {refreshBriefing = false} = {}) {
+  state.uiLanguage = language || 'en';
+  state.uiTranslations = await getUiTranslations(state.uiLanguage);
+  localStorage.setItem('coa-ui-language', state.uiLanguage);
+  try {
+    await api('/v1/engine/ui-language', {method: 'POST', body: JSON.stringify({language: state.uiLanguage})});
+  } catch (_) {}
+  document.documentElement.lang = state.uiLanguage;
+  const uiLang = document.getElementById('ui-lang-sel');
+  if (uiLang && uiLang.value !== state.uiLanguage) uiLang.value = state.uiLanguage;
+  applyStaticTranslations();
+  renderQueryUi();
+  document.getElementById('tick-d').textContent = `${t('tick.label', 'Tick')}: ${state.tick || '--'}`;
+  renderContacts();
+  renderContactDetails();
+  renderCoas();
+  renderSimulator();
+  renderBriefing();
+  renderEventSummary();
+  renderLlmIndicator();
+  syncVisibilityControls();
+  syncCombatControls();
+  updateMap();
+  if (refreshBriefing && state.briefing) {
+    try {
+      await ensureBriefing(state.briefingLanguage, {render: true});
+    } catch (_error) {
+      // Keep the existing briefing if the translated one cannot be generated.
+    }
+  }
+}
+
+async function startEngine() {
+  const scenarioId = document.getElementById('scn-sel').value;
+  const interval = document.getElementById('int-in').value || '2';
+  const seed = document.getElementById('seed-in').value || '42';
+  await api(`/v1/engine/start?scenario_id=${encodeURIComponent(scenarioId)}&mode=simulation&interval=${encodeURIComponent(interval)}&seed=${encodeURIComponent(seed)}`, {method: 'POST'});
+  state.scenario = scenarioId;
+  clearBriefings();
+  focusScenario(state.scenario);
+  updateCableRoutes();
+  connectSocket();
+  await refreshSnapshot();
+  state.running = true;
+  document.getElementById('btn-go').style.display = 'none';
+  document.getElementById('btn-stop').style.display = 'inline-block';
+  logLine(`Engine started on ${scenarioId}`);
+  logLine('Guide: watch the map first, then open COAs once the threat level starts changing');
+  fetchTimelineData();
+}
+
+async function stopEngine() {
+  await api('/v1/engine/stop', {method: 'POST'});
+  if (state.socket) state.socket.close();
+  state.running = false;
+  setBadge(t('status.stopped', 'Stopped'), 'badge b-err');
+  document.getElementById('btn-go').style.display = 'inline-block';
+  document.getElementById('btn-stop').style.display = 'none';
+  logLine('Engine stopped');
+}
+
+function connectSocket() {
+  if (state.socket) state.socket.close();
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  state.socket = new WebSocket(`${protocol}//${location.host}/v1/engine/ws/stream`);
+  state.socket.onopen = () => {
+    setBadge(t('status.connected', 'Connected'), 'badge b-ok');
+    state.socket.send(JSON.stringify({scenario_id: state.scenario, mode: 'simulation', tick_interval: Number(document.getElementById('int-in').value || 2)}));
+  };
+  state.socket.onclose = () => setBadge(t('status.disconnected', 'Disconnected'), 'badge b-err');
+  state.socket.onerror = () => setBadge(t('status.socket_error', 'Socket Error'), 'badge b-err');
+  state.socket.onmessage = (event) => {
+    const payload = JSON.parse(event.data);
+    if (payload.type === 'heartbeat') return;
+    applyTick(payload);
+  };
+}
+
+function flashThreat(level) {
+  const flash = document.getElementById('map-flash');
+  const color = level === 'CRITICAL' ? '#ef4444' : (level === 'HIGH' ? '#f97316' : '#00000000');
+  flash.style.boxShadow = color === '#00000000' ? 'none' : `inset 0 0 0 4px ${color}`;
+  clearTimeout(state.flashTimer);
+  state.flashTimer = setTimeout(() => flash.style.boxShadow = 'none', 450);
+}
+
+function applyTick(payload) {
+  const prevThreatLevel = state.lastState?.current_threat_level || null;
+  const prevThreatEntity = state.lastState?.top_threat_entity || null;
+  const prevRecommended = state.recommendation?.recommended?.coa?.coa_id || null;
+  const prevPackage = state.recommendation?.recommended_package?.package_id || null;
+  state.tick = payload.tick || 0;
+  upsertContacts(payload.contacts || []);
+  state.tracks = payload.tracks || {};
+  state.coas = payload.scored_coas || [];
+  state.recommendation = payload.recommendation || null;
+  state.assets = payload.assets || state.assets || [];
+  state.anomalies = payload.anomalies || state.anomalies || [];
+  state.threats = payload.threats || state.threats || [];
+  state.lastState = payload.state || {};
+  state.latestEventSummary = payload.latest_event_summary || state.latestEventSummary;
+  document.getElementById('tick-d').textContent = `${t('tick.label', 'Tick')}: ${state.tick}`;
+  const threatLevel = payload.state?.current_threat_level || 'LOW';
+  const threatNode = document.getElementById('thr-lvl');
+  threatNode.textContent = threatLevel;
+  threatNode.className = `thr-val thr-${threatLevel}`;
+  document.getElementById('thr-prb').textContent = fmtPct(payload.state?.top_threat_probability);
+  document.getElementById('thr-ent').textContent = payload.state?.top_threat_entity || '';
+  const nextRecommended = payload.recommendation?.recommended?.coa?.coa_id || null;
+  const nextPackage = payload.recommendation?.recommended_package?.package_id || null;
+  if (payload.analysis?.reason_summary) {
+    setWhyChanged(payload.analysis.reason_summary);
+    logAnalysisReason(payload.analysis.reason_summary, payload.analysis.trigger, payload.tick || state.tick);
+  }
+  const reasons = [];
+  if (payload.analysis?.threat_changed) {
+    reasons.push(
+      `Threat ${prevThreatLevel || '--'} -> ${threatLevel} on ${payload.state?.top_threat_entity || 'unknown entity'}`
+    );
+  }
+  if (payload.analysis?.coa_changed) {
+    if (prevRecommended !== nextRecommended) {
+      reasons.push(`Top COA ${prevRecommended || '--'} -> ${nextRecommended || '--'}`);
+    }
+    if (prevPackage !== nextPackage && nextPackage) {
+      reasons.push(`Recommended package now ${nextPackage}`);
+    }
+  }
+  if (!reasons.length && payload.analysis?.analysis_run) {
+    reasons.push(
+      `Analysis ran with threat ${threatLevel} and recommendation ${nextRecommended || 'none'}`
+    );
+  }
+  if (!payload.analysis?.reason_summary && reasons.length) {
+    setWhyChanged(reasons.join(' | '));
+  }
+  if (payload.analysis?.threat_changed || payload.analysis?.coa_changed) flashThreat(threatLevel);
+  updateMap();
+  renderContacts();
+  renderContactDetails();
+  renderCoas();
+  if (!simulatorBusy()) renderSimulator();
+  renderEventSummary();
+  syncVisibilityControls();
+  syncCombatControls();
+  fetchTimelineData();
+}
+
+async function fetchBriefing() {
+  const btn = document.getElementById('btn-briefing');
+  if (state.briefingBusy) return;
+  state.briefingBusy = true;
+  btn.textContent = t('briefing.generating', 'Generating Briefing...');
+  btn.disabled = true;
+  try {
+    const lang = document.getElementById('briefing-lang') ? document.getElementById('briefing-lang').value : state.uiLanguage;
+    await ensureBriefing(lang, {render: true, log: true});
+  } catch (error) {
+    logLine(`${t('briefing.error', 'Briefing error')}: ${error.message}`);
+  } finally {
+    state.briefingBusy = false;
+    btn.textContent = t('briefing.generate', 'Generate Briefing');
+    btn.disabled = false;
+  }
+}
+
+async function downloadBriefingPDF(language) {
+  try {
+    const lang = language || document.getElementById('briefing-lang')?.value || state.uiLanguage || 'en';
+    const briefing = await ensureBriefing(lang, {render: state.briefingLanguage === lang});
+    const response = await fetch('/v1/engine/briefing/export/pdf', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(briefing)
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const suffix = lang === 'en' ? 'en' : lang;
+    link.download = `briefing_${state.scenario || 'scenario'}_${suffix}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    logLine(t('briefing.downloaded', 'Briefing PDF downloaded'));
+  } catch (error) {
+    logLine(`${t('briefing.pdf_error', 'PDF error')}: ${error.message}`);
+  }
+}
+
+async function refreshSnapshot() {
+  const snapshot = await api('/v1/engine/analysis');
+  state.contacts = snapshot.contacts || [];
+  state.tracks = snapshot.tracks || {};
+  state.coas = snapshot.scored_coas || [];
+  state.recommendation = snapshot.recommendation || null;
+  state.assets = snapshot.assets || [];
+  state.anomalies = snapshot.anomalies || [];
+  state.threats = snapshot.threats || [];
+  state.lastState = snapshot.state || {};
+  state.llmStatus = snapshot.llm_status || state.llmStatus;
+  state.latestEventSummary = snapshot.latest_event_summary || state.latestEventSummary;
+  state.tick = snapshot.state?.tick || 0;
+  const snapshotScenario = snapshot.state?.scenario?.scenario_id;
+  if (snapshotScenario) {
+    state.scenario = snapshotScenario;
+    const selector = document.getElementById('scn-sel');
+    if (selector && selector.value !== snapshotScenario) selector.value = snapshotScenario;
+    updateCableRoutes();
+  }
+  const tickNode = document.getElementById('tick-d');
+  if (tickNode) tickNode.textContent = `${t('tick.label', 'Tick')}: ${state.tick || '--'}`;
+  const threatLevel = snapshot.state?.current_threat_level || 'LOW';
+  const threatNode = document.getElementById('thr-lvl');
+  if (threatNode) {
+    threatNode.textContent = threatLevel;
+    threatNode.className = `thr-val thr-${threatLevel}`;
+  }
+  const threatProb = document.getElementById('thr-prb');
+  const threatEntity = document.getElementById('thr-ent');
+  if (threatProb) threatProb.textContent = fmtPct(snapshot.state?.top_threat_probability);
+  if (threatEntity) threatEntity.textContent = snapshot.state?.top_threat_entity || '';
+  updateMap();
+  renderContacts();
+  renderContactDetails();
+  renderCoas();
+  if (!simulatorBusy()) renderSimulator();
+  renderLlmIndicator();
+  renderEventSummary();
+  syncVisibilityControls();
+  syncCombatControls();
+}
+
+async function fetchVisibleAis() {
+  if (!state.map || !state.show_ais) {
+    state.aisContacts = [];
+    updateMap();
+    return;
+  }
+  const bounds = state.map.getBounds();
+  const query = new URLSearchParams({
+    latmin: String(bounds.getSouth()),
+    latmax: String(bounds.getNorth()),
+    lonmin: String(bounds.getWest()),
+    lonmax: String(bounds.getEast()),
+    include_in_analysis: 'true',
+  });
+  try {
+    const result = await api(`/v1/engine/ais/visible?${query.toString()}`);
+    state.aisContacts = result.contacts || [];
+    if (result.analysis?.reason_summary) {
+      setWhyChanged(result.analysis.reason_summary);
+      logAnalysisReason(result.analysis.reason_summary, result.analysis.trigger, result.analysis.tick);
+    }
+    if (!result.enabled) {
+      logLine(result.source_summary || 'NOAA replay feed disabled');
+    } else if ((result.contacts || []).length) {
+      logLine(`NOAA replay visible feed: ${result.contacts.length} contact(s), ${result.suspicious_count || 0} suspicious`);
+    }
+    await refreshSnapshot();
+  } catch (error) {
+    logLine(`AIS feed error: ${error.message}`);
+  } finally {
+    updateMap();
+  }
+}
+
+async function updateCombatFeedConfig(overrides = {}) {
+  const current = state.lastState?.scenario || {};
+  const payload = {
+    enabled: overrides.enabled ?? document.getElementById('combat-feed-enabled')?.checked ?? current.combat_contacts_enabled ?? false,
+    density: overrides.density ?? document.getElementById('combat-feed-density')?.value ?? current.combat_contacts_density ?? 'medium',
+    scenario_type: overrides.scenario_type ?? document.getElementById('combat-feed-scenario')?.value ?? current.combat_contacts_scenario_type ?? 'mixed_traffic',
+  };
+  try {
+    await api('/v1/engine/combat_contacts/toggle', {method: 'POST', body: JSON.stringify(payload)});
+    await refreshSnapshot();
+    logLine(`Combat feed ${payload.enabled ? 'enabled' : 'disabled'} (${payload.density}, ${payload.scenario_type})`);
+  } catch (error) {
+    setSimStatus(`Combat feed update failed: ${error.message}`, 'err');
+  }
+}
+
+async function injectCombatFeedContact(kind, suspicious = false) {
+  const center = state.map ? state.map.getCenter() : {lat: 57.5, lng: 19.5};
+  const sourceKind = kind || 'aircraft';
+  try {
+    const result = await api('/v1/engine/combat_contacts/inject', {
+      method: 'POST',
+      body: JSON.stringify({
+        kind: sourceKind,
+        suspicious,
+        allegiance: suspicious ? 'hostile' : null,
+        lat: center.lat,
+        lon: center.lng,
+      }),
+    });
+    if (result.status !== 'ok') throw new Error(result.message || 'Injection failed');
+    await refreshSnapshot();
+    setSimStatus(`Combat contact injected: ${sourceKind}${suspicious ? ' (suspicious)' : ''}`, 'ok');
+    logLine(`Injected combat contact ${sourceKind}${suspicious ? ' suspicious' : ''}`);
+  } catch (error) {
+    setSimStatus(`Combat contact injection failed: ${error.message}`, 'err');
+    logLine(`Combat contact injection error: ${error.message}`);
+  }
+}
+
+function toggleSimMode(force) {
+  state.simMode = typeof force === 'boolean' ? force : !state.simMode;
+  state.mapInteractionMode = state.simMode ? 'add' : null;
+  if (!state.simMode) state.mapPlacement = null;
+  renderSimulator();
+}
+
+function toggleAdvancedSimulator(force) {
+  state.simAdvanced = typeof force === 'boolean' ? force : !state.simAdvanced;
+  if (!state.simAdvanced) {
+    state.simMode = false;
+    state.mapInteractionMode = null;
+    state.mapPlacement = null;
+  }
+  renderSimulator();
+}
+
+function presetTemplate(presetKey, center) {
+  const presets = {
+    suspicious_vessel: {name: 'Suspicious Vessel', type: 'vessel', ally: 'hostile', speed: '4', heading: '110', radius_nm: '20', ais_off: 'true'},
+    hostile_uav: {name: 'Hostile UAV', type: 'uav', ally: 'hostile', speed: '38', heading: '180', radius_nm: '20', ais_off: 'false'},
+    jamming_event: {name: 'Jamming Source', type: 'jamming', ally: 'hostile', speed: '0', heading: '0', radius_nm: '25', ais_off: 'false'},
+    cable_event: {name: 'Cable Alert', type: 'cable_event', ally: 'hostile', speed: '0', heading: '0', radius_nm: '20', ais_off: 'false'},
+    allied_patrol: {name: 'Allied Patrol Vessel', type: 'vessel', ally: 'friendly', speed: '14', heading: '90', radius_nm: '20', ais_off: 'false'},
+  };
+  return {...state.simDraft, ...(presets[presetKey] || presets.suspicious_vessel), lat: center.lat.toFixed(4), lon: center.lng.toFixed(4)};
+}
+
+function playbookTemplate(playKey, center) {
+  const shifts = {
+    maritime_threat: {lat: center.lat + 0.08, lng: center.lng + 0.08},
+    uav_airport: {lat: center.lat + 0.03, lng: center.lng - 0.04},
+    ew_escalation: {lat: center.lat, lng: center.lng},
+    allied_isr: {lat: center.lat - 0.05, lng: center.lng - 0.02},
+    allied_patrol: {lat: center.lat - 0.08, lng: center.lng + 0.03},
+    cable_alert: {lat: center.lat + 0.01, lng: center.lng + 0.01},
+  };
+  const mappedPreset = {
+    maritime_threat: 'suspicious_vessel',
+    uav_airport: 'hostile_uav',
+    ew_escalation: 'jamming_event',
+    allied_isr: 'hostile_uav',
+    allied_patrol: 'allied_patrol',
+    cable_alert: 'cable_event',
+  };
+  const draft = presetTemplate(mappedPreset[playKey] || 'suspicious_vessel', center);
+  const shifted = shifts[playKey] || {lat: center.lat, lng: center.lng};
+  if (playKey === 'allied_isr') {
+    draft.name = 'Allied ISR UAV';
+    draft.type = 'uav';
+    draft.ally = 'friendly';
+    draft.speed = '42';
+    draft.heading = '90';
+    draft.ais_off = 'false';
+  }
+  draft.lat = shifted.lat.toFixed(4);
+  draft.lon = shifted.lng.toFixed(4);
+  return draft;
+}
+
+function loadPreset(presetKey) {
+  const center = state.map ? state.map.getCenter() : {lat: 57.5, lng: 19.5};
+  state.simDraft = presetTemplate(presetKey, center);
+  toggleAdvancedSimulator(true);
+  toggleSimMode(true);
+  setSimStatus(t('sim.preset_loaded', 'Preset loaded. Adjust position if needed, then click Add Unit.'), 'ok');
+  syncSimInputs();
+}
+
+async function injectPresetNow(presetKey) {
+  const center = state.map ? state.map.getCenter() : {lat: 57.5, lng: 19.5};
+  state.simDraft = presetTemplate(presetKey, center);
+  await injectUnit();
+}
+
+async function injectPlaybookNow(playKey) {
+  const center = state.map ? state.map.getCenter() : {lat: 57.5, lng: 19.5};
+  state.simDraft = playbookTemplate(playKey, center);
+  await injectUnit();
+}
+
+async function injectUnit(latlng = null) {
+  if (latlng) {
+    state.simDraft.lat = Number(latlng.lat).toFixed(6);
+    state.simDraft.lon = Number(latlng.lng).toFixed(6);
+  }
+  if (state.simDraft.type === 'neutral_vessel' && state.simDraft.ally !== 'neutral') state.simDraft.ally = 'neutral';
+  if (state.simDraft.type === 'event_marker' && state.simDraft.ally === 'friendly') state.simDraft.ally = 'neutral';
+  const lat = numberOrNull(state.simDraft.lat);
+  const lon = numberOrNull(state.simDraft.lon);
+  if (lat === null || lon === null) {
+    setSimStatus('Unit placement requires valid coordinates.', 'err');
+    logLine('Unit placement requires valid coordinates');
+    return;
+  }
+  const entityId = makeId('USER');
+  const hostile = state.simDraft.ally === 'hostile';
+  const optimisticContact = {
+    contact_id: makeId('C'),
+    timestamp: new Date().toISOString(),
+    source: 'simulation',
+    contact_type: mapEntityTypeToContactType(state.simDraft.type),
+    lat,
+    lon,
+    speed: numberOrNull(state.simDraft.speed) ?? 0,
+    heading: numberOrNull(state.simDraft.heading) ?? 0,
+    confidence: 0.86,
+    entity_id: entityId,
+    is_hostile: hostile,
+    attributes: {
+      name: state.simDraft.name || entityId,
+      allegiance: state.simDraft.ally,
+      unit_class: state.simDraft.type,
+      ais_off: state.simDraft.ais_off === 'true',
+      radius_nm: numberOrNull(state.simDraft.radius_nm) ?? 20,
+      suspicious_maneuver: state.simDraft.type === 'vessel' && state.simDraft.ally === 'hostile',
+    }
+  };
+  const payload = {
+    contacts: [optimisticContact]
+  };
+  try {
+    const result = await api('/v1/engine/inject', {method: 'POST', body: JSON.stringify(payload)});
+    if (result.status !== 'ok') throw new Error(result.message || 'Injection failed');
+    upsertContacts([optimisticContact]);
+    state.injectedStack.push(entityId);
+    updateMap();
+    renderContacts();
+    state.simDraft = {name: 'New Unit', type: 'vessel', ally: 'hostile', speed: '8', heading: '0', lat: '', lon: '', radius_nm: '20', ais_off: 'false'};
+    state.simulatorNotes[entityId] = 'Injected manually';
+    const analysis = result.analysis || {};
+    const pWarnings = result.placement_warnings || [];
+    if (pWarnings.length) {
+      pWarnings.forEach((w) => logLine(`⚠ ${w.warning}`));
+    }
+    const warnSuffix = pWarnings.length ? ' [placement adjusted]' : '';
+    setSimStatus(`Unit ${optimisticContact.attributes.name} added${warnSuffix}. Threat ${analysis.threat_level || '--'} · COA ${analysis.recommended_coa || '--'}`, pWarnings.length ? 'warn' : 'ok');
+    if (analysis.reason_summary) {
+      setWhyChanged(analysis.reason_summary);
+      logAnalysisReason(analysis.reason_summary, analysis.trigger, analysis.tick);
+    }
+    toggleSimMode(false);
+    setSelectedEntity(entityId, 'simulation');
+    await refreshSnapshot();
+    logLine(`Injected unit ${entityId}`);
+  } catch (error) {
+    setSimStatus(`Add unit failed: ${error.message}`, 'err');
+    logLine(`Add unit error: ${error.message}`);
+  }
+}
+
+async function moveUnitTo(entityId, latlng = null) {
+  const contact = (state.contacts || []).find((item) => item.entity_id === entityId);
+  if (!contact) {
+    setSimStatus('Move failed: unit not found.', 'err');
+    return;
+  }
+  const draft = getUnitDraft(contact);
+  const lat = latlng ? Number(latlng.lat) : numberOrNull(draft.lat);
+  const lon = latlng ? Number(latlng.lng) : numberOrNull(draft.lon);
+  if (lat === null || lon === null || Number.isNaN(lat) || Number.isNaN(lon)) {
+    setSimStatus('Move requires valid coordinates.', 'err');
+    return;
+  }
+  const payload = {
+    lat,
+    lon,
+    speed: numberOrNull(draft.speed),
+    heading: numberOrNull(draft.heading),
+    attributes: {
+      ...(contact.attributes || {}),
+      allegiance: draft.allegiance,
+      ais_off: draft.ais_off,
+    },
+  };
+  try {
+    await api(`/v1/engine/contacts/${encodeURIComponent(entityId)}`, {method: 'PATCH', body: JSON.stringify(payload)});
+    state.mapInteractionMode = null;
+    state.simMode = false;
+    setSimStatus(`Unit ${entityId} moved to ${fmtLatLon(lat, lon)}.`, 'ok');
+    await refreshSnapshot();
+    setSelectedEntity(entityId, contactSource(contact));
+    logLine(`Moved ${entityId} to ${fmtLatLon(lat, lon)}`);
+  } catch (error) {
+    setSimStatus(`Move failed: ${error.message}`, 'err');
+  }
+}
+
+async function undoLastInjection() {
+  const entityId = state.injectedStack.pop();
+  if (!entityId) {
+    setSimStatus(t('sim.no_injections', 'No manual injections to undo.'), 'err');
+    return;
+  }
+  try {
+    await deleteUnit(entityId);
+    setSimStatus(`${t('sim.removed_last', 'Removed last injected unit')} ${entityId}.`, 'ok');
+  } catch (error) {
+    setSimStatus(`${t('sim.undo_failed', 'Undo failed:')} ${error.message}`, 'err');
+  }
+}
+
+async function resetScenarioFromDashboard() {
+  try {
+    const wasRunning = state.running;
+    if (wasRunning) {
+      await api('/v1/engine/stop', {method: 'POST'});
+    }
+    await api('/v1/engine/reset', {method: 'POST'});
+    state.contacts = [];
+    state.tracks = {};
+    state.coas = [];
+    state.recommendation = null;
+    state.anomalies = [];
+    state.threats = [];
+    clearBriefings();
+    state.injectedStack = [];
+    state.simulatorNotes = {};
+    state.scheduledActions = {};
+    state.editDrafts = {};
+    state.actionDrafts = {};
+    state.editOpenFor = null;
+    state.actionOpenFor = null;
+    state.expandedCoaId = null;
+    state.selectedEntityId = null;
+    state.selectedContactSource = 'simulation';
+    state.mapInteractionMode = null;
+    renderContacts();
+    renderCoas();
+    renderBriefing();
+    renderSimulator();
+    updateMap();
+    setBadge(t('status.stopped', 'Stopped'), 'badge b-err');
+    document.getElementById('btn-go').style.display = 'inline-block';
+    document.getElementById('btn-stop').style.display = 'none';
+    state.running = false;
+    await api(`/v1/engine/scenario/${encodeURIComponent(document.getElementById('scn-sel').value)}`, {method: 'POST'});
+    await refreshSnapshot();
+    setSimStatus(t('sim.scenario_reset', 'Scenario reset. Press Start to run again.'), 'ok');
+    logLine('Scenario reset from dashboard');
+  } catch (error) {
+    setSimStatus(`${t('sim.reset_failed', 'Reset failed:')} ${error.message}`, 'err');
+  }
+}
+
+async function saveUnitEdit(entityId) {
+  const draft = state.editDrafts[entityId];
+  if (!draft) return;
+  const payload = {
+    name: draft.name,
+    contact_type: draft.contact_type,
+    is_hostile: draft.allegiance === 'hostile',
+    lat: numberOrNull(draft.lat),
+    lon: numberOrNull(draft.lon),
+    speed: numberOrNull(draft.speed),
+    heading: numberOrNull(draft.heading),
+    attributes: {allegiance: draft.allegiance, ais_off: draft.ais_off}
+  };
+  const result = await api(`/v1/engine/contacts/${encodeURIComponent(entityId)}`, {method: 'PATCH', body: JSON.stringify(payload)});
+  state.simulatorNotes[entityId] = t('sim.unit_updated', 'Unit updated');
+  state.editOpenFor = null;
+  if (result.analysis?.reason_summary) {
+    setWhyChanged(result.analysis.reason_summary);
+    logAnalysisReason(result.analysis.reason_summary, result.analysis.trigger, result.analysis.tick);
+  }
+  await refreshSnapshot();
+  logLine(`Updated ${entityId}`);
+}
+
+async function deleteUnit(entityId) {
+  const result = await api(`/v1/engine/inject/${encodeURIComponent(entityId)}`, {method: 'DELETE'});
+  delete state.editDrafts[entityId];
+  delete state.actionDrafts[entityId];
+  delete state.scheduledActions[entityId];
+  delete state.simulatorNotes[entityId];
+  if (state.selectedEntityId === entityId) {
+    state.selectedEntityId = null;
+    state.selectedContactSource = 'simulation';
+  }
+  state.contacts = state.contacts.filter((contact) => contact.entity_id !== entityId);
+  if (result.analysis?.reason_summary) {
+    setWhyChanged(result.analysis.reason_summary);
+    logAnalysisReason(result.analysis.reason_summary, result.analysis.trigger, result.analysis.tick);
+  }
+  await refreshSnapshot();
+  updateMap();
+  renderContacts();
+  renderSimulator();
+  logLine(`Removed ${entityId}`);
+}
+
+async function scheduleAction(entityId) {
+  const draft = state.actionDrafts[entityId];
+  if (!draft) return;
+  const payload = {
+    entity_id: entityId,
+    action: draft.action,
+    execute_tick: numberOrNull(draft.execute_tick),
+    lat: numberOrNull(draft.lat),
+    lon: numberOrNull(draft.lon),
+    new_heading: numberOrNull(draft.new_heading),
+    new_speed: numberOrNull(draft.new_speed),
+    radius_nm: numberOrNull(draft.radius_nm),
+    attributes: {}
+  };
+  const result = await api('/v1/engine/actions', {method: 'POST', body: JSON.stringify(payload)});
+  if (result.status === 'ok') {
+    const tick = result.scheduled.tick;
+    state.scheduledActions[entityId] = state.scheduledActions[entityId] || [];
+    state.scheduledActions[entityId].push({tick, action: draft.action});
+    state.simulatorNotes[entityId] = `${draft.action} queued for tick ${tick}`;
+    state.actionOpenFor = null;
+    await refreshSnapshot();
+    renderSimulator();
+    logLine(`Scheduled ${draft.action} for ${entityId} at tick ${tick}`);
+  }
+}
+
+function bindStaticEvents() {
+  document.getElementById('btn-go').addEventListener('click', startEngine);
+  document.getElementById('btn-stop').addEventListener('click', stopEngine);
+  document.getElementById('btn-briefing').addEventListener('click', fetchBriefing);
+  document.getElementById('btn-pdf').addEventListener('click', () => downloadBriefingPDF(document.getElementById('briefing-lang')?.value || state.uiLanguage));
+  document.getElementById('btn-pdf-en').addEventListener('click', () => downloadBriefingPDF('en'));
+  document.getElementById('sim-toggle').addEventListener('click', () => toggleSimMode());
+  document.getElementById('sim-adv-toggle').addEventListener('click', () => toggleAdvancedSimulator());
+  document.getElementById('sim-undo-last').addEventListener('click', undoLastInjection);
+  document.getElementById('sim-reset-scenario').addEventListener('click', resetScenarioFromDashboard);
+  document.getElementById('sim-add-btn').addEventListener('click', injectUnit);
+  document.getElementById('sim-cancel-btn').addEventListener('click', () => toggleSimMode(false));
+  document.getElementById('map-style-sel').addEventListener('change', (evt) => setMapStyle(evt.target.value));
+  document.getElementById('ui-lang-sel').addEventListener('change', async (evt) => {
+    await applyUiLanguage(evt.target.value, {refreshBriefing: false});
+  });
+  document.getElementById('briefing-lang').addEventListener('change', async (evt) => {
+    state.briefingLanguage = evt.target.value;
+  });
+  document.getElementById('scn-sel').addEventListener('change', async (evt) => {
+    const newScenario = evt.target.value;
+    clearBriefings();
+    if (state.running) {
+      try {
+        await api('/v1/engine/stop', {method: 'POST'});
+        await api('/v1/engine/reset', {method: 'POST'});
+        await api(`/v1/engine/scenario/${encodeURIComponent(newScenario)}`, {method: 'POST'});
+        const interval = document.getElementById('int-in') ? document.getElementById('int-in').value : '2';
+        await api(`/v1/engine/start?scenario_id=${encodeURIComponent(newScenario)}&mode=simulation&interval=${encodeURIComponent(interval)}`, {method: 'POST'});
+        state.scenario = newScenario;
+        focusScenario(state.scenario);
+        updateCableRoutes();
+        connectSocket();
+        logLine(`Switched running scenario to ${newScenario}`);
+        fetchTimelineData();
+      } catch (err) {
+        logLine(`Error switching scenario: ${err.message}`);
+      }
+    } else {
+      state.scenario = newScenario;
+      focusScenario(state.scenario);
+      updateCableRoutes();
+      logLine(`Scenario focus changed to ${state.scenario}`);
+      fetchTimelineData();
+      if (state.show_ais) fetchVisibleAis();
+    }
+  });
+  document.getElementById('toggle-cable-routes').addEventListener('change', (evt) => {
+    state.showCableRoutes = evt.target.checked;
+    updateCableRoutes();
+    logLine(`${state.showCableRoutes ? 'Showing' : 'Hiding'} cable routes for ${state.scenario}`);
+  });
+  document.getElementById('toggle-live-ais').addEventListener('change', async (evt) => {
+    state.show_ais = evt.target.checked;
+    state.showAis = state.show_ais;
+    if (state.show_ais) {
+      await fetchVisibleAis();
+    } else {
+      state.aisContacts = [];
+      updateMap();
+      logLine('Hiding NOAA replay traffic overlay');
+    }
+  });
+  document.getElementById('toggle-combat-contacts').addEventListener('change', (evt) => {
+    state.show_combat_contacts = evt.target.checked;
+    updateMap();
+    renderContacts();
+    renderContactDetails();
+  });
+  document.getElementById('toggle-sim-entities').addEventListener('change', (evt) => {
+    state.show_sim_entities = evt.target.checked;
+    updateMap();
+    renderContacts();
+    renderContactDetails();
+  });
+  document.getElementById('combat-feed-enabled')?.addEventListener('change', async (evt) => {
+    await updateCombatFeedConfig({enabled: evt.target.checked});
+  });
+  document.getElementById('combat-feed-density')?.addEventListener('change', async () => {
+    await updateCombatFeedConfig();
+  });
+  document.getElementById('combat-feed-scenario')?.addEventListener('change', async () => {
+    await updateCombatFeedConfig();
+  });
+  document.getElementById('combat-inject-aircraft')?.addEventListener('click', async () => {
+    await injectCombatFeedContact('aircraft', false);
+  });
+  document.getElementById('combat-inject-vessel')?.addEventListener('click', async () => {
+    await injectCombatFeedContact('vessel', false);
+  });
+  document.getElementById('combat-inject-submarine')?.addEventListener('click', async () => {
+    await injectCombatFeedContact('submarine', false);
+  });
+  document.getElementById('combat-inject-suspicious')?.addEventListener('click', async () => {
+    await injectCombatFeedContact('vessel', true);
+  });
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.activeTab = btn.dataset.tab;
+      document.querySelectorAll('.tab-btn').forEach((node) => node.classList.toggle('active', node === btn));
+      document.querySelectorAll('.tab-pane').forEach((pane) => pane.classList.toggle('active', pane.id === `pane-${state.activeTab}`));
+    });
+  });
+  document.querySelectorAll('.fcheck').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      state.filters[checkbox.dataset.f] = checkbox.checked;
+      updateMap();
+      renderContacts();
+    });
+  });
+  [['si-name','name'],['si-type','type'],['si-ally','ally'],['si-spd','speed'],['si-hdg','heading'],['si-lat','lat'],['si-lon','lon'],['si-rad','radius_nm'],['si-ais','ais_off']].forEach(([id,key]) => {
+    document.getElementById(id).addEventListener('input', (evt) => {
+      state.simDraft[key] = evt.target.value;
+      if (key === 'lat' || key === 'lon') syncSimInputs();
+    });
+  });
+  document.querySelectorAll('.sim-preset').forEach((button) => {
+    button.addEventListener('click', () => loadPreset(button.dataset.preset));
+  });
+  document.querySelectorAll('.sim-quick').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (button.dataset.quick === 'inject_preset') {
+        await injectPresetNow(button.dataset.preset);
+      }
+    });
+  });
+  document.querySelectorAll('.sim-play').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await injectPlaybookNow(button.dataset.play);
+    });
+  });
+  document.getElementById('co-list').addEventListener('click', (evt) => {
+    const card = evt.target.closest('.coa-card');
+    if (!card) return;
+    const coaId = card.dataset.coaId;
+    state.expandedCoaId = state.expandedCoaId === coaId ? null : coaId;
+    renderCoas();
+  });
+  document.getElementById('sim-units').addEventListener('input', (evt) => {
+    const wrap = evt.target.closest('[data-entity]');
+    if (!wrap) return;
+    const entityId = wrap.dataset.entity;
+    const field = evt.target.dataset.field;
+    if (!field) return;
+    if (wrap.classList.contains('su-edit')) {
+      const draft = state.editDrafts[entityId] || {};
+      draft[field] = field === 'ais_off' ? evt.target.value === 'true' : evt.target.value;
+      state.editDrafts[entityId] = draft;
+    } else if (wrap.classList.contains('su-action')) {
+      const draft = state.actionDrafts[entityId] || {};
+      draft[field] = evt.target.value;
+      state.actionDrafts[entityId] = draft;
+    }
+  });
+  document.getElementById('sim-units').addEventListener('click', async (evt) => {
+    const button = evt.target.closest('button[data-action]');
+    if (!button) return;
+    const entityId = button.dataset.entity;
+    const action = button.dataset.action;
+    if (action === 'toggle-edit') {
+      setSelectedEntity(entityId, contactSource((state.contacts || []).find((item) => item.entity_id === entityId)));
+      state.editOpenFor = state.editOpenFor === entityId ? null : entityId;
+      state.actionOpenFor = null;
+      renderSimulator();
+      return;
+    }
+    if (action === 'select-unit') {
+      setSelectedEntity(entityId, contactSource((state.contacts || []).find((item) => item.entity_id === entityId)));
+      return;
+    }
+    if (action === 'move-unit') {
+      setSelectedEntity(entityId, contactSource((state.contacts || []).find((item) => item.entity_id === entityId)));
+      state.simMode = false;
+      state.mapInteractionMode = 'move';
+      renderSimulator();
+      return;
+    }
+    if (action === 'save-edit') {
+      await saveUnitEdit(entityId);
+      return;
+    }
+    if (action === 'delete-unit') {
+      await deleteUnit(entityId);
+      return;
+    }
+    if (action === 'prefill-action') {
+      setSelectedEntity(entityId, contactSource((state.contacts || []).find((item) => item.entity_id === entityId)));
+      const kind = button.dataset.kind;
+      const draft = getActionDraft(entityId);
+      draft.action = kind;
+      state.actionOpenFor = entityId;
+      state.editOpenFor = null;
+      renderSimulator();
+      return;
+    }
+    if (action === 'close-action') {
+      state.actionOpenFor = null;
+      renderSimulator();
+      return;
+    }
+    if (action === 'run-action') {
+      await scheduleAction(entityId);
+    }
+  });
+  document.getElementById('ct-list').addEventListener('click', async (evt) => {
+    const button = evt.target.closest('button[data-action]');
+    if (button) {
+      const entityId = button.dataset.entity;
+      const action = button.dataset.action;
+      if (action === 'select-contact') {
+        setSelectedEntity(entityId, button.dataset.source || contactSource((state.contacts || []).find((item) => item.entity_id === entityId)));
+        return;
+      }
+      if (action === 'move-contact') {
+        setSelectedEntity(entityId, button.dataset.source || contactSource((state.contacts || []).find((item) => item.entity_id === entityId)));
+        state.simMode = false;
+        state.mapInteractionMode = 'move';
+        renderSimulator();
+        return;
+      }
+    }
+    const row = evt.target.closest('.ct-item[data-entity]');
+    if (row) setSelectedEntity(row.dataset.entity, row.dataset.source || contactSource((state.contacts || []).find((item) => item.entity_id === row.dataset.entity)));
+  });
+}
+
+window.addEventListener('load', async () => {
+  initMap();
+  bindStaticEvents();
+  const savedLanguage = localStorage.getItem('coa-ui-language') || 'en';
+  state.uiLanguage = savedLanguage;
+  state.briefingLanguage = savedLanguage;
+  collectSourceUiStrings();
+  await applyUiLanguage(savedLanguage);
+  renderContacts();
+  renderCoas();
+  renderSimulator();
+  renderBriefing();
+  renderEventSummary();
+  renderLlmIndicator();
+  initQueryHandlers();
+  await refreshSnapshot();
+  await refreshLlmStatus();
+  window.setInterval(refreshLlmStatus, 1000);
+  logLine(t('log.dashboard_ready', 'Dashboard ready. Select a scenario and click Start.'));
+  logLine(t('log.tip_quick_actions', 'Tip: use the big quick actions in Simulator if you want immediate threat/COA changes.'));
+  logLine(t('log.tip_playbooks', 'Use mission playbooks for realistic test cases: maritime threat, UAV near airport, EW escalation, or allied support.'));
+  setWhyChanged(state.lastWhyChanged);
+});

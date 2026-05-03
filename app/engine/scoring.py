@@ -46,7 +46,8 @@ def score_coas(
             + settings.scoring_weight_logistics * logistics
             + settings.scoring_weight_missed_detection * detection
         )
-        raw *= 0.2 + 0.8 * feasibility
+        feasibility_multiplier = max(0.05, feasibility ** 1.8)
+        raw *= feasibility_multiplier
         total = round(raw * 100.0, 1)
 
         tradeoffs: list[str] = []
@@ -54,6 +55,11 @@ def score_coas(
             tradeoffs.append("Not supportable with current asset inventory")
         elif feasibility < 1.0:
             tradeoffs.append(f"Only {feasibility:.0%} asset support available")
+            tradeoffs.append(f"Score penalized by feasibility factor {feasibility_multiplier:.2f}")
+        if coa.assigned_assets:
+            tradeoffs.append(f"Assigned assets: {len(coa.assigned_assets)}/{len(coa.required_assets)}")
+        if len(coa.target_entities) > 1:
+            tradeoffs.append(f"Multi-target coordination across {len(coa.target_entities)} entities")
         if sim.success_probability > 0.7:
             tradeoffs.append("High success probability")
         elif sim.success_probability < 0.5:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from ..core.config import settings
-from ..core.constants import AnomalyLevel, EntityType, EventType
+from ..core.constants import BEHAVIOR_WEIGHTS, AnomalyLevel, EntityType, EventType
 from ..core.schemas import AnomalyResult, FeatureVector, OperationalEvent
 
 logger = logging.getLogger("coa_engine.engine.anomaly_detection")
@@ -154,6 +154,35 @@ def _rule_score(event: OperationalEvent, feat: FeatureVector) -> tuple[float, li
     if feat.source_confidence_weight < 0.5:
         score *= settings.anomaly_low_confidence_dampener
         explanations.append("Low source confidence reduces overall score")
+
+    # Behavior-intent hooks (driven by BEHAVIOR_WEIGHTS config)
+    behavior_mode = event.attributes.get("behavior_mode", "")
+    intent = event.attributes.get("intent", "")
+    target_infra = event.attributes.get("target_infra", "")
+
+    if behavior_mode in BEHAVIOR_WEIGHTS:
+        bw = BEHAVIOR_WEIGHTS[behavior_mode]
+
+        # Additive boost — only if mode-specific condition is met
+        if "anomaly_add" in bw:
+            required_intent = bw.get("anomaly_condition_intent")
+            needs_target = behavior_mode == "hostile_probe_infrastructure"
+            condition_ok = True
+            if required_intent and intent != required_intent:
+                condition_ok = False
+            if needs_target and not target_infra:
+                condition_ok = False
+            if condition_ok:
+                pts = bw["anomaly_add"]
+                score += pts
+                explanations.append(
+                    bw["explanation_anomaly"].format(target=target_infra, pts=int(pts))
+                )
+
+        # Multiplicative adjustment — always applies for the mode
+        if "anomaly_multiply" in bw:
+            score *= bw["anomaly_multiply"]
+            explanations.append(bw["explanation_anomaly"])
 
     score = min(max(score, 0.0), 100.0)
     return score, explanations

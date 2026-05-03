@@ -24,8 +24,10 @@ class Settings(BaseSettings):
     threat_weight_heading: float = 0.08
     threat_weight_jamming: float = 0.07
     threat_weight_convoy: float = 0.05
-    threat_cable_severance_vessel_boost: float = 0.10
+    threat_cable_severance_vessel_boost: float = 0.18
+    threat_jamming_entity_boost: float = 0.12
     threat_uav_heading_boost: float = 0.05
+    allied_deterrence_factor: float = 0.20
 
     # Scoring weights
     scoring_weight_success: float = 0.30
@@ -78,22 +80,51 @@ class Settings(BaseSettings):
     simulation_cable_protect_boost: float = 0.25
     simulation_combined_boost: float = 0.30
 
-    # LLM configuration
+    # LLM configuration (llama.cpp OpenAI-compatible endpoint)
     llm_base_url: str = "http://192.168.4.13:8080/v1"
     llm_api_key: str = "sk-mi-ia-secreta"
-    llm_model: str = "gemma4"
+    llm_model: str = "local"
     llm_timeout_seconds: float = 300.0
     llm_enabled: bool = True
     llm_max_tokens: int = 2048
+    llm_queue_timeout_seconds: float = 30.0
+    llm_health_timeout_seconds: float = 10.0
 
     # API Security
     api_key_auth_enabled: bool = False
     api_keys_csv: str = ""
-    cors_origins_csv: str = "http://localhost:8501"
+    cors_origins_csv: str = "*"
     rate_limit_per_minute: int = 60
+    rate_limit_enabled: bool = True
 
     # Session
     session_max_events: int = 5000
+
+    # Real-time engine
+    contact_history_max_events: int = 5000
+    analysis_event_window: int = 500
+    portfolio_max_coas: int = 3
+    portfolio_candidate_pool: int = 6
+    portfolio_max_packages: int = 5
+
+    # AIS feed integration
+    ais_provider: str = "noaa_replay"
+    ais_enabled: bool = True
+    ais_aishub_username: str = ""
+    ais_aishub_base_url: str = "https://data.aishub.net/ws.php"
+    ais_cache_seconds: int = 60
+    ais_max_position_age_min: int = 30
+    ais_request_timeout_seconds: float = 15.0
+    ais_suspicion_min_score: float = 0.6
+    ais_loiter_speed_kts: float = 1.5
+    ais_near_infra_km: float = 8.0
+    ais_heading_to_infra_deg: float = 35.0
+    ais_visible_limit: int = 250
+
+    # Persistence
+    persistence_enabled: bool = True
+    persistence_db_path: str = "data/coa_engine_state.db"
+    persistence_debounce_seconds: float = 2.0
 
     model_config = {"env_prefix": "COA_"}
 

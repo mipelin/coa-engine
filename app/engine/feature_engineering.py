@@ -113,6 +113,11 @@ def compute_features(events: list[OperationalEvent], infrastructure: list[dict] 
 
     total_entities = max(len(set(e.entity_id for e in sorted_events)), 1)
 
+    allied_positions = [
+        (e.lat, e.lon) for e in sorted_events
+        if e.entity_type == EntityType.ALLIED_VESSEL or e.entity_type == EntityType.ISR_ASSET
+    ]
+
     features: list[FeatureVector] = []
     for event in sorted_events:
         dist_nearest, dist_second_cable = _distance_to_nearest_infra(event, infrastructure)
@@ -147,6 +152,13 @@ def compute_features(events: list[OperationalEvent], infrastructure: list[dict] 
 
         heading_score = _heading_towards_critical_asset(event)
 
+        allied_score = 0.0
+        if allied_positions and event.entity_type not in (EntityType.ALLIED_VESSEL, EntityType.ISR_ASSET):
+            for alat, alon in allied_positions:
+                d = haversine_km(event.lat, event.lon, alat, alon)
+                if d < 50:
+                    allied_score = max(allied_score, 1.0 - d / 50.0)
+
         features.append(FeatureVector(
             event_id=event.event_id,
             entity_id=event.entity_id,
@@ -162,6 +174,7 @@ def compute_features(events: list[OperationalEvent], infrastructure: list[dict] 
             convoy_activity_nearby=round(convoy_score, 3),
             time_since_cable_severance=round(time_since, 1),
             heading_towards_critical_asset=round(heading_score, 3),
+            allied_proximity_score=round(allied_score, 3),
         ))
 
     return features

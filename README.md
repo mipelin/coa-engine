@@ -1,143 +1,220 @@
 # COA Engine — Decision Superiority Module
 
-A working MVP of an AI-assisted Course of Action (COA) analysis engine for operational decision support. Built for the NATO DIANA innovation framework.
+A working prototype of an AI-assisted Course of Action (COA) analysis engine for operational decision support. Built for the NATO DIANA innovation framework.
 
 ## What This System Does
 
-- Ingests synthetic operational events from a simulated Baltic Sea hybrid-threat scenario
-- Extracts features, detects anomalies, and assesses threat probability using explainable rules
+- Loads synthetic maritime scenarios (Baltic, Arctic, Mediterranean) with hostile, friendly, and neutral entities
+- Runs a tick-based simulation with behavior models (hostile probe, loiter-and-divert, friendly patrol, neutral transit)
+- Detects anomalies, assesses threats, and generates explainable threat probabilities per entity
 - Generates advisory courses of action, simulates outcomes with Monte Carlo methods, scores and ranks them
-- Produces explainable, human-readable commander briefings
-- Displays results on an interactive dashboard with operational map and charts
+- Evaluates Rules of Engagement (ROE) per COA — restricted actions are flagged, rejected actions are excluded
+- Produces commander-style briefings with threat narratives
+- Accepts natural-language queries about current state, with deterministic fallbacks when no LLM is available
+- Provides "what-if" forecasting grounded in simulation — the LLM may rephrase forecasts but never invents them
+- Serves an operational dashboard with live map, contact tracking, COA ranking, and NL query interface
 
 ## What This System Does NOT Do
 
-- **No autonomous targeting or lethal engagement** — this is decision-support only
+- **No autonomous targeting or lethal engagement** — advisory outputs only
 - **No command execution** — all recommendations require human approval
 - **No classified data** — all data is synthetic and open-source
-- **No real NATO integrations** — designed only as a local prototype with clear API boundaries
-- **No live data feeds** — runs entirely on local synthetic data
+- **No real NATO integrations** — local prototype with clear API boundaries
+- **No live data feeds in default mode** — runs on local synthetic data (AIS/NOAA replay available when configured)
 
 ## Quick Start
 
 ```bash
-# From the coa_engine/ directory
-
 # Install dependencies
 pip install -r requirements.txt
 
 # Run tests
-pytest -v
+pytest app/tests/ -v
 
-# Run the backend API (Terminal 1)
-./run_backend.sh
-# API docs: http://localhost:8002/docs
-
-# Run the Streamlit dashboard (Terminal 2)
+# Start the engine (dashboard + API)
 ./run_ui.sh
-# Dashboard: http://localhost:8501
 ```
 
-For a guided demonstration, see [DEMO_SCRIPT.md](DEMO_SCRIPT.md).
+Then open:
+- **Dashboard**: http://localhost:8002/dashboard
+- **API docs**: http://localhost:8002/docs
+
+The FastAPI dashboard is the only supported operator UI for this prototype.
+
+For LLM-enhanced briefings and narratives, create a `.env` file (see `.env.example`).
+
+## LLM Configuration (llama.cpp)
+
+The engine uses an OpenAI-compatible endpoint (llama.cpp server). Set these in `.env`:
+
+```bash
+COA_LLM_ENABLED=true
+COA_LLM_BASE_URL=http://192.168.4.14:8080/v1    # your llama.cpp server
+COA_LLM_API_KEY=                                 # optional — leave empty for llama.cpp (no auth)
+COA_LLM_MODEL=local                              # model name the server expects
+```
+
+When `COA_LLM_ENABLED=false` (or when the server is unreachable), all features fall back to deterministic answers — the engine works fully without an LLM.
+
+**Test the llama.cpp server with curl:**
+
+```bash
+curl http://192.168.4.14:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 32
+  }'
+```
+
+A successful response returns JSON with `choices[0].message.content`. A connection error means the server is not running or the URL is wrong — the engine will log a warning and use deterministic fallbacks.
 
 ## Architecture
 
 ```
 coa_engine/
   app/
-    main.py                  # FastAPI application entry point
-    api/                     # Route handlers
-      routes_scenarios.py    # Scenario loading endpoints
-      routes_events.py       # Event ingestion endpoints
-      routes_analysis.py     # Analysis pipeline endpoint
-      routes_coa.py          # COA/simulation/recommendation/briefing endpoints
+    main.py                     # FastAPI application, CORS, rate limiting middleware
+    api/                        # REST API route handlers
+      routes_engine.py          # Real-time engine control (tick, inject, query, state)
+      routes_analysis.py        # Legacy analysis pipeline
+      routes_coa.py             # COA generation, simulation, recommendation, briefing
+      routes_events.py          # Event ingestion
+      routes_scenarios.py       # Scenario loading (legacy)
+      routes_sse.py             # Server-Sent Events / WebSocket streaming
+      routes_dashboard.py       # Dashboard HTML serving
     core/
-      schemas.py             # Pydantic models (contracts)
-      constants.py           # Enum types, infrastructure data
-      config.py              # Settings
-    data/
-      sample_scenario_baltic.json  # Synthetic Baltic scenario (20 events)
-    engine/                  # Analytic modules (independent of FastAPI)
-      event_ingestion.py     # Scenario/event loading and validation
-      feature_engineering.py # Feature extraction (haversine distances, anomaly signals)
-      anomaly_detection.py   # Rule-based anomaly scoring with explanations
-      threat_assessment.py   # Entity-level threat probability aggregation
-      coa_generation.py      # Advisory COA generation
-      simulation.py          # Monte Carlo simulation (seeded, deterministic)
-      scoring.py             # Weighted multi-criteria COA scoring
-      recommendation.py      # Top-COA selection with rationale and alternatives
-      explanation.py         # Commander briefing generation
+      schemas.py                # Pydantic data models (all API contracts)
+      config.py                 # Settings (env-prefixed, tunable weights)
+      constants.py              # Event types, entity types, infrastructure, behavior weights
+      weights.py                # Scenario-specific weight overrides
+      rate_limit.py             # Configurable rate limiter (disabled in tests)
+      api_client.py             # Python client for the REST API
+    engine/                     # Analytic modules (independent of FastAPI)
+      contact_engine.py         # Real-time contact ingestion (simulation/hybrid/live modes)
+      scenario_generator.py     # Scenario templates (Baltic, Arctic, Mediterranean)
+      behavior_models.py        # Deterministic behavior policies for entity movement
+      behavior_features.py      # Behavior-mode feature extraction
+      contact_enrichment.py     # Distance-to-infra, heading-toward, loitering detection
+      event_engine.py           # External event processing (cable, jamming, course changes)
+      roe_engine.py             # Rules of Engagement evaluation
+      feature_engineering.py    # Spatial features (haversine distances, anomaly signals)
+      anomaly_detection.py      # Rule-based anomaly scoring (0–100) with explanations
+      threat_assessment.py      # Entity-level threat probability aggregation
+      coa_generation.py         # Template-based advisory COA generation
+      coa_templates.py          # COA template definitions and selection logic
+      coa_validation.py         # Asset feasibility and spatial validation
+      simulation.py             # Monte Carlo simulation (seeded, deterministic)
+      scoring.py                # Weighted multi-criteria COA scoring
+      recommendation.py         # Top-COA selection with rationale and alternatives
+      portfolio.py              # Multi-COA portfolio (combined packages)
+      plan_packages.py          # Task-level plan generation for packages
+      explanation.py            # Commander briefing generation
+      query_engine.py           # Natural-language query with guardrails
+      forecasting.py            # What-if forecasting (simulation-based, LLM-free)
+      event_loop.py             # Reactive analysis loop (tick-driven + event-triggered)
+      engine_scheduler.py       # Background tick scheduler with SSE subscriptions
+      state_store.py            # Thread-safe in-memory state store
+      event_bus.py              # Pub/sub event bus for real-time updates
+      persistence.py            # SQLite state persistence with auto-save
+      llm_client.py             # LLM integration (optional, explanation-only)
+      llm_narrative.py          # Threat narrative and briefing enrichment
+      entity_catalog.py         # Entity type registry
+      entity_tracking.py        # Track management and position history
+      asset_state.py            # Asset state management and catalog
+      noaa_replay.py            # NOAA replay dataset feed
+      ais_feed.py               # AIS feed integration (AISHub)
+      time_series.py            # Temporal event analysis
+    i18n/
+      static_translations.py    # COA template translations
     ui/
-      streamlit_app.py       # Streamlit dashboard with map, charts, briefing
-    tests/
-      test_phase1.py         # Foundation tests (schemas, endpoints)
-      test_phase2_analysis.py # Analysis pipeline tests (features, anomalies, threats)
-      test_phase3_coa.py     # COA/simulation/scoring/recommendation tests
-      test_phase4_ui.py      # Dashboard data helper tests
-      test_end_to_end.py     # Full pipeline integration tests
+      dashboard_build.py        # Dashboard HTML/JS/CSS builder for the FastAPI dashboard
+    data/
+      sample_scenario_baltic.json
+      sample_scenario_arctic.json
+      sample_scenario_mediterranean.json
+      noaa_replay_baltic_hybrid_001.json
+      noaa_replay_arctic_submarine_001.json
+      noaa_replay_mediterranean_001.json
+    tests/                      # 402 tests
+      test_phase1.py ... test_rate_limit.py
 ```
 
-The engine layer is independent of FastAPI and Streamlit. All modules use simple deterministic functions with Pydantic schemas.
+The engine layer is independent of FastAPI. All analysis modules use deterministic functions with Pydantic schemas.
 
-## Dashboard
-
-The Streamlit dashboard (`./run_ui.sh`) provides seven tabs:
-
-- **Scenario Overview** — event counts, entity distribution, event type chart
-- **Map** — folium map with color-coded markers for vessels, UAVs, cables, convoys, and jamming zones
-- **Timeline** — Plotly scatter timeline of events by entity and time, colored by anomaly level
-- **Threat Assessment** — ranked threat table with probability, level, drivers, and anomaly details
-- **COA Ranking** — scored COAs with bar chart, detail table, and recommendation highlight
-- **Simulation Results** — grouped bar chart comparing success/escalation/cable risk/missed detection
-- **Commander Briefing** — formatted situation, indicators, assessment, risks, confidence, assumptions
-
-## API Endpoints
+## Real-Time Engine API
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Health check |
-| GET | `/scenario/sample` | Load sample Baltic scenario |
-| POST | `/events/ingest` | Ingest a batch of operational events |
-| POST | `/analysis/run` | Run features, anomalies, threat assessment |
+| POST | `/engine/scenario/load` | Load scenario by ID |
+| POST | `/engine/scenario/{id}` | Load scenario (alt) |
+| GET | `/engine/scenario/templates` | List available scenario templates |
+| GET | `/engine/scenario/info` | Current scenario metadata |
+| GET | `/engine/scenario/stimuli` | Upcoming/fired stimuli |
+| POST | `/engine/tick` | Advance one tick (triggers reactive analysis) |
+| POST | `/engine/start` | Start auto-tick scheduler |
+| POST | `/engine/stop` | Stop scheduler |
+| POST | `/engine/reset` | Reset engine state |
+| GET | `/engine/state` | Current engine state (tick, threat level, contacts) |
+| GET | `/engine/contacts` | Active contacts |
+| GET | `/engine/contacts/history` | Contact history |
+| GET | `/engine/tracks` | Contact tracks with positions |
+| PATCH | `/engine/contacts/{id}` | Update a contact |
+| GET | `/engine/threats` | Threat assessment results |
+| GET | `/engine/coas` | Scored COAs |
+| GET | `/engine/recommendation` | Current recommendation |
+| GET | `/engine/analysis` | Full analysis snapshot |
+| GET | `/engine/briefing` | Commander briefing |
+| GET | `/engine/assets` | Asset inventory |
+| POST | `/engine/assets` | Set asset inventory |
+| POST | `/engine/inject` | Inject contacts (triggers re-analysis) |
+| DELETE | `/engine/inject/{id}` | Remove injected contact |
+| POST | `/engine/actions` | Schedule a future action |
+| POST | `/engine/query` | Natural-language query |
+| POST | `/engine/mode/{mode}` | Set engine mode (simulation/hybrid/live) |
+| POST | `/engine/translate-ui` | Translate UI strings |
+| GET | `/engine/ais/visible` | Visible AIS contacts |
+| GET | `/stream/events` | Server-Sent Events stream |
+
+## Legacy Pipeline API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/analysis/run` | Run full analysis pipeline on loaded events |
 | POST | `/coa/generate` | Generate advisory COAs |
 | POST | `/coa/simulation/run` | Monte Carlo simulation for each COA |
 | POST | `/coa/recommendation/run` | Score and recommend top COA |
 | POST | `/coa/briefing/generate` | Generate commander briefing |
+| POST | `/coa/briefing/export/json` | Export briefing as JSON |
+| POST | `/coa/briefing/export/pdf` | Export briefing as PDF |
 
-API documentation is available at `http://localhost:8002/docs` when the backend is running.
+## Safety Boundaries
 
-## Analysis Pipeline
-
-1. **Event ingestion** — Load and validate synthetic events via Pydantic schemas
-2. **Feature engineering** — Compute distances (haversine), speed anomalies, course change counts, multi-source correlation, jamming/convoy proximity, heading-toward-asset signals
-3. **Anomaly detection** — Rule-based scoring (0-100) with explainable per-rule breakdown; cable severance is CRITICAL
-4. **Threat assessment** — Aggregate anomalies by entity with event-type weighting; exclude allied/ISR assets; sort by probability
-5. **COA generation** — Context-aware advisory options (ISR, shadow, cable protection, airspace safety, border monitoring, combined)
-6. **Simulation** — Seeded Monte Carlo (1000 runs) using beta distributions around COA-specific baselines
-7. **Scoring** — Weighted formula: success 30%, cable protection 20%, escalation 15%, time 10%, detection 10%, civilian safety 10%, logistics 5%
-8. **Recommendation** — Select rank-1 COA with rationale and alternative edge cases
-9. **Briefing** — Formatted commander decision-support product
+- **Guardrails**: The query engine refuses questions about lethal targeting, engagement authorization, and ROE bypass. These are checked before any processing.
+- **LLM is explanation-only**: The LLM may rephrase answers and enrich narratives, but it never generates forecasts, selects COAs, or modifies engine state.
+- **Forecasting is simulation-based**: What-if forecasts are produced by cloning and running the simulation forward. The LLM may rephrase the output but cannot invent outcomes.
+- **ROE enforcement**: Every COA is evaluated against ROE rules. Restricted COAs are flagged with reasons; rejected COAs are excluded from recommendation.
+- **No state mutation from queries**: Natural-language queries and forecasts never modify engine state.
 
 ## Known Limitations
 
-- Single synthetic scenario only; no scenario editor or multi-scenario loading
-- Rule-based anomaly detection only (no ML model trained on real data, by design)
+- Rule-based anomaly detection only (no ML model trained on real data — by design)
 - Simulation uses simplified probability models, not high-fidelity wargaming
-- No persistence layer; all data is in-memory
-- No user authentication or multi-user support
-- No real external integrations (AIS, SIGINT, satellite)
-- Dashboard consumes engine functions directly, not the REST API
+- Single-user prototype; no authentication or multi-user support
+- In-memory state store (SQLite persistence available but not enabled by default)
+- No real external integrations in default configuration (AIS/NOAA replay available when configured)
 
-## Phase Status
+## Test Status
 
-**MVP complete.** All five phases delivered:
+**402 tests passing.** Full coverage of:
 
-- **Phase 1**: Repo structure, schemas, sample scenario, FastAPI skeleton
-- **Phase 2**: Feature engineering, anomaly detection, threat assessment
-- **Phase 3**: COA generation, Monte Carlo simulation, scoring, recommendation, briefing
-- **Phase 4**: Streamlit dashboard with map, charts, and briefing view
-- **Phase 5**: End-to-end testing, documentation, demo script, repository cleanup
-
-## Safety and Ethical Boundary
-
-This system is a **human decision-support tool only**. It does not make autonomous decisions, assign targets, or execute military commands. All outputs are advisory and require human review before any action. The prototype uses only synthetic, publicly describable data. No component of this system should be interpreted as a weapon system, autonomous targeting system, or command execution system.
+- Feature engineering, anomaly detection, threat assessment
+- COA generation, simulation, scoring, recommendation
+- ROE evaluation and event engine
+- Behavior models and scenario generator
+- Real-time engine: contacts, ticks, injection, scheduling
+- Natural-language query engine with guardrails
+- Forecasting module (baseline, event-based, COA-based)
+- Persistence, rate limiting, API client
+- End-to-end integration tests

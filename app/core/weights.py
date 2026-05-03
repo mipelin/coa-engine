@@ -15,6 +15,7 @@ class ScenarioWeights(BaseModel):
     threat_weight_convoy: float | None = None
     threat_cable_severance_vessel_boost: float | None = None
     threat_uav_heading_boost: float | None = None
+    allied_deterrence_factor: float | None = None
 
     # Scoring weights
     scoring_weight_success: float | None = None

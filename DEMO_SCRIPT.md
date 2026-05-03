@@ -1,93 +1,79 @@
-# COA Engine — Demo Script
+# COA Engine — Demo Script (5 Minutes)
 
-## 3-5 Minute Demonstration Flow
-
-### Setup (30 seconds)
-
-Open two terminals in the `coa_engine/` directory.
+## Setup (before demo)
 
 ```bash
-# Terminal 1: Start the backend
 pip install -r requirements.txt
-./run_backend.sh
-
-# Terminal 2: Start the dashboard
 ./run_ui.sh
 ```
 
-The dashboard opens at `http://localhost:8501`.
+Open http://localhost:8002/dashboard in a browser.
+Open http://localhost:8002/docs in a second tab.
 
-### 1. Scenario Overview (30 seconds)
+Use only the FastAPI dashboard for the demo flow. Do not switch to any legacy UI.
 
-**Show:** Scenario Overview tab.
+## 1. Load Scenario (0:00 – 0:30)
 
-**Talk:**
-- "This is the COA Engine, a decision-support prototype for operational analysis."
-- "It loads a synthetic Baltic Sea hybrid-threat scenario with 20 events across multiple domains: maritime, air, ground, and electronic warfare."
-- "All data is synthetic. This is a prototype, not connected to any live systems."
+In the top header bar, select **Baltic Sea** from the scenario dropdown, then click **Start**.
 
-### 2. Operational Map (45 seconds)
+> "This is the COA Engine — a decision-support prototype for maritime threat analysis. I'm loading a synthetic Baltic Sea scenario with six entities: two hostile vessels, a UAV, convoy activity, allied patrol assets, and critical subsea internet cables."
 
-**Show:** Map tab.
+Wait for a few ticks. The map should show red hostile markers, blue friendly markers, and green infrastructure icons.
 
-**Talk:**
-- "Red markers show suspicious vessels near subsea cable corridors."
-- "Blue markers are allied naval assets on patrol."
-- "Orange is an unidentified UAV near Visby Airport."
-- "Purple circles show GPS/VHF jamming zones — note the expanding radius."
-- "Dark green stars mark critical infrastructure: two subsea internet cables, airports."
-- "This is the same picture a commander would see, but the system goes further."
+> "All data is synthetic. This is not connected to any live system."
 
-### 3. Analysis Pipeline (60 seconds)
+## 2. Threat Evolution (0:30 – 1:30)
 
-**Show:** Timeline tab, then Threat Assessment tab.
+Point to the threat level indicator rising from LOW to MEDIUM to HIGH.
 
-**Talk:**
-- "The engine computes features for every event: distances to infrastructure, speed anomalies, course changes, multi-source correlation."
-- "Anomaly detection uses explainable rules — every score has a human-readable explanation."
-- "Cable severance is flagged as CRITICAL. Suspicious vessels near cables get elevated scores."
-- "Threat assessment aggregates by entity. Suspicious vessels rank highest. Allied vessels are excluded from threat ranking."
-- "The system labels these as estimated probabilities, not certainties."
+> "As the simulation advances, the hostile vessel probes toward the cable corridor. A course change triggers. The system detects increased proximity, jamming correlation, and heading-toward-infrastructure indicators. Each entity gets an explainable threat score — you can see the drivers in the Contacts tab."
 
-### 4. COA Ranking (60 seconds)
+Switch to the **Contacts** tab. Show the top threat entity with its probability and drivers.
 
-**Show:** COA Ranking tab.
+> "Every score has a human-readable explanation: proximity to infrastructure, course changes, jamming correlation. This is not a black box."
 
-**Talk:**
-- "Based on the threat picture, the system generates advisory courses of action: increase ISR, shadow vessels, protect the second cable, manage airspace, monitor borders."
-- "Each COA is simulated using Monte Carlo methods — 1000 runs per option."
-- "The scoring formula balances success probability, cable protection, escalation risk, civilian safety, and logistics."
-- "The recommended COA is highlighted. The rationale and tradeoffs are explained in plain language."
-- "This is advisory only. The system recommends — a human decides."
+## 3. COA Ranking and ROE (1:30 – 2:30)
 
-### 5. Simulation Results (30 seconds)
+Switch to the **COAs** tab. Show the ranked list of advisory courses of action.
 
-**Show:** Simulation Results tab.
+> "Based on the threat picture, the system generates advisory courses of action: increase ISR coverage, shadow vessels, protect the cable, manage airspace, monitor borders, and a combined approach. Each COA is Monte Carlo simulated — 1000 runs per option."
 
-**Talk:**
-- "The grouped chart shows how each COA compares across success, escalation, cable risk, and detection probability."
-- "Confidence intervals come from the Monte Carlo distribution."
-- "Combined approaches score higher on effectiveness but carry more logistics burden."
+Point to the ROE badge and reason strip on each COA card.
 
-### 6. Commander Briefing (30 seconds)
+> "Each COA is evaluated against Rules of Engagement. You can see the colored badge at a glance — green for allowed, amber for restricted, orange pulsing if authorization is needed, red and struck through if rejected. The reason strip below the card title explains why. Restricted COAs are flagged with reasons; rejected ones are excluded from the recommendation."
 
-**Show:** Commander Briefing tab.
+Point to the recommended COA.
 
-**Talk:**
-- "The system produces a formatted decision-support briefing: situation, indicators, assessment, COAs considered, recommendation, risks, confidence, and assumptions."
-- "This is designed to look like what a staff officer would produce — but generated from the quantitative pipeline."
+> "The recommended COA is highlighted with a rationale and tradeoffs. This is advisory only — a human decides."
 
-### 7. API Demo (15 seconds)
+## 4. Natural-Language Query (2:30 – 3:15)
 
-**Show:** Backend terminal or Swagger docs at `http://localhost:8002/docs`.
+Switch to the **Ask** tab. Click the **Threat level** chip (or type the question).
 
-**Talk:**
-- "All outputs are also available through REST API endpoints — designed to be modular and pluggable."
-- "The architecture uses clear API boundaries, while this prototype runs entirely locally with synthetic data."
+Show the structured answer.
 
-### Closing
+> "Operators can ask questions in plain language. The system builds context from live state and routes through guardrails. When no LLM is configured, deterministic fallbacks answer from the data."
 
-**Emphasize:**
-- "Everything you saw is synthetic data, explainable rules, and advisory outputs."
-- "No autonomous targeting. No command execution. Human decision-support only."
-- "The MVP demonstrates that a modular AI/software layer can augment operational decision-making."
+## 5. Forecasting and What-If (3:15 – 4:15)
+
+Click the **Cable what-if** chip (or type "What if the cable is severed?").
+
+Show the forecast output: threat trend, key risks, expected outcome.
+
+> "This is where it gets interesting. The system clones the current simulation state and runs it forward with the hypothetical event injected. The forecast is produced by the simulation engine — the LLM may rephrase it but cannot invent outcomes."
+
+Click the **COA outcome** chip (or type "What happens if we choose the recommended COA?").
+
+Show the COA-specific forecast with different threat projection.
+
+> "Different COAs produce different projected outcomes. The system shows the effectiveness score, escalation risk, and threat level change for each option. The operator can compare before deciding."
+
+## 6. API and Closing (4:15 – 5:00)
+
+Switch to the Swagger docs tab. Show the endpoint list.
+
+> "Everything you saw is available through REST API — state queries, contact management, COA ranking, natural-language queries, and real-time event streaming. The engine layer is framework-agnostic."
+
+> "To be clear: this is a human decision-support tool only. No autonomous targeting. No command execution. All outputs are advisory and require human review. The prototype uses only synthetic data."
+
+> "The MVP demonstrates that a modular software layer can provide explainable, grounded decision support for operational scenarios — without any autonomous action."

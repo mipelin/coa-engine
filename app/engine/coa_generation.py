@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import logging
 
-from ..core.constants import EntityType, EventType
-from ..core.schemas import CourseOfAction, OperationalEvent, ThreatResult
+from ..core.constants import EventType
+from ..core.schemas import AssetState, Contact, CourseOfAction, OperationalEvent, ThreatResult
+from .asset_state import asset_capabilities, asset_profile
+from .coa_templates import select_templates
+from .coa_validation import validate_coa_set
 
 logger = logging.getLogger("coa_engine.engine.coa_generation")
 
@@ -13,8 +16,7 @@ def _has_cable_severance(events: list[OperationalEvent]) -> bool:
 
 
 def _has_uav_threat(threats: list[ThreatResult]) -> bool:
-    entity_types = {t.entity_id for t in threats}
-    return any("UAV" in eid for eid in entity_types)
+    return any("UAV" in t.entity_id for t in threats)
 
 
 def _has_convoy_activity(events: list[OperationalEvent]) -> bool:
@@ -27,217 +29,189 @@ def _max_threat_level(threats: list[ThreatResult]) -> str:
     return threats[0].threat_level.value
 
 
-def _normalize_asset_inventory(
-    asset_inventory: dict[str, int] | None,
-    required_assets: set[str],
-) -> dict[str, int]:
-    if asset_inventory is None:
-        return {asset: 1 for asset in required_assets}
-    return {asset: max(int(asset_inventory.get(asset, 1)), 0) for asset in required_assets}
+def _support_metrics(events: list[OperationalEvent]) -> dict[str, int]:
+    latest_by_entity: dict[str, OperationalEvent] = {}
+    for event in events:
+        current = latest_by_entity.get(event.entity_id)
+        if current is None or event.timestamp >= current.timestamp:
+            latest_by_entity[event.entity_id] = event
+
+    allied_vessels = 0
+    isr_support = 0
+    pressure_entities: set[str] = set()
+
+    for event in latest_by_entity.values():
+        if event.entity_type.value == "allied_vessel":
+            allied_vessels += 1
+        elif event.entity_type.value == "isr_asset":
+            isr_support += 1
+
+        if event.entity_type.value in {"suspicious_vessel", "uav", "convoy"}:
+            pressure_entities.add(event.entity_id)
+
+    return {
+        "allied_vessels": allied_vessels,
+        "isr_support": isr_support,
+        "friendly_support": allied_vessels + isr_support,
+        "pressure_entities": len(pressure_entities),
+    }
 
 
-def _apply_asset_feasibility(
-    coa: CourseOfAction,
-    asset_inventory: dict[str, int],
-) -> CourseOfAction:
-    available_assets = [asset for asset in coa.required_assets if asset_inventory.get(asset, 0) > 0]
-    missing_assets = [asset for asset in coa.required_assets if asset_inventory.get(asset, 0) <= 0]
-    feasibility = 1.0 if not coa.required_assets else len(available_assets) / len(coa.required_assets)
-    assumptions = list(coa.assumptions)
-    if missing_assets:
-        assumptions.append(
-            "Current asset inventory does not fully support this COA: "
-            + ", ".join(missing_assets)
-        )
+def _contact_asset_type(event: OperationalEvent) -> str | None:
+    if event.entity_type.value == "allied_vessel":
+        name = str(event.attributes.get("name", "")).lower()
+        if "coast guard" in name or "cutter" in name:
+            return "coast_guard_cutter"
+        return "maritime_patrol_vessel"
+    if event.entity_type.value == "isr_asset":
+        name = str(event.attributes.get("name", "")).lower()
+        if "sat" in name:
+            return "satellite_pass"
+        if "awacs" in name:
+            return "awacs_coverage"
+        return "isr_uav"
+    return None
 
-    return coa.model_copy(update={
-        "available_assets": available_assets,
-        "missing_assets": missing_assets,
-        "feasibility_score": round(feasibility, 3),
-        "assumptions": assumptions,
-    })
+
+def _asset_state_from_contact_event(event: OperationalEvent) -> AssetState | None:
+    asset_type = _contact_asset_type(event)
+    if not asset_type:
+        return None
+    profile = asset_profile(asset_type)
+    return AssetState(
+        asset_id=f"contact-{event.entity_id}",
+        asset_type=asset_type,
+        capabilities=sorted(asset_capabilities(asset_type, asset_type)),
+        quantity_total=1,
+        quantity_available=1,
+        status="available",
+        domain=profile.get("domain"),
+        display_name=str(event.attributes.get("name") or event.entity_id),
+        home_base=profile.get("home_base"),
+        location_label=str(event.attributes.get("name") or profile.get("home_base") or event.entity_id),
+        lat=event.lat,
+        lon=event.lon,
+        coverage_radius_km=profile.get("coverage_radius_km"),
+        transit_speed_kts=profile.get("transit_speed_kts"),
+        response_eta_min=profile.get("response_eta_min"),
+        endurance_hours=profile.get("endurance_hours"),
+        on_station_hours=profile.get("on_station_hours"),
+        concurrency_limit=int(profile.get("concurrency_limit", 1)),
+        notes=f"Derived from live contact {event.entity_id}",
+    )
+
+
+def _derive_contact_asset_states(
+    events: list[OperationalEvent],
+    active_contacts: list[Contact] | None = None,
+) -> list[AssetState]:
+    latest_by_entity: dict[str, OperationalEvent] = {}
+    for event in events:
+        current = latest_by_entity.get(event.entity_id)
+        if current is None or event.timestamp >= current.timestamp:
+            latest_by_entity[event.entity_id] = event
+
+    if active_contacts is not None:
+        active_ids = {contact.entity_id for contact in active_contacts}
+        latest_by_entity = {
+            entity_id: event
+            for entity_id, event in latest_by_entity.items()
+            if entity_id in active_ids
+        }
+
+    derived: list[AssetState] = []
+    for event in latest_by_entity.values():
+        state = _asset_state_from_contact_event(event)
+        if state is not None:
+            derived.append(state)
+    return derived
 
 
 def generate_coas(
     events: list[OperationalEvent],
     threats: list[ThreatResult],
     asset_inventory: dict[str, int] | None = None,
+    asset_states: list[AssetState] | None = None,
+    active_contacts: list[Contact] | None = None,
 ) -> list[CourseOfAction]:
-    """Generate advisory courses of action based on the current threat picture."""
-    coas: list[CourseOfAction] = []
-
+    """Generate advisory courses of action using template-based system."""
     cable_severed = _has_cable_severance(events)
     uav_threat = _has_uav_threat(threats)
     convoy_active = _has_convoy_activity(events)
-    high_threats = [t for t in threats if t.threat_level.value in ("HIGH", "CRITICAL")]
+    threat_level = _max_threat_level(threats)
+    support = _support_metrics(events)
+    merged_asset_states = list(asset_states or [])
+    if not merged_asset_states and not asset_inventory:
+        derived_assets = _derive_contact_asset_states(events, active_contacts=active_contacts)
+        seen_asset_ids = {state.asset_id for state in merged_asset_states}
+        for derived in derived_assets:
+            if derived.asset_id not in seen_asset_ids:
+                merged_asset_states.append(derived)
+                seen_asset_ids.add(derived.asset_id)
 
-    # COA 1: Enhanced ISR and monitoring
-    coas.append(CourseOfAction(
-        coa_id="COA-001",
-        title="Increase ISR Coverage and Observation",
-        description=(
-            "Recommend increasing ISR coverage to maintain persistent observation "
-            "of suspicious vessel activity. Coordinate with available tactical UAV assets "
-            "and satellite observation requests to improve coverage of the cable corridor."
-        ),
-        required_assets=["isr_uav", "satellite_observation_request", "sigint_team"],
-        assumptions=[
-            "ISR assets can be redirected within 30 minutes",
-            "Weather permits UAV operations in the area",
-            "Satellite revisit time is acceptable for tracking",
-        ],
-        estimated_time_minutes=30,
-        expected_effect="Persistent observation of suspicious entities and cable corridor",
-        risk_categories=["sensor_gap", "weather"],
-        escalation_risk=0.05,
-        civilian_risk=0.0,
-        logistics_burden=0.2,
-    ))
+    friendly_support = support["friendly_support"]
+    pressure_entities = support["pressure_entities"]
 
-    # COA 2: Shadow suspicious vessels
-    if high_threats:
-        coas.append(CourseOfAction(
-            coa_id="COA-002",
-            title="Shadow Suspicious Vessels with Allied Maritime Assets",
-            description=(
-                "Recommend allied maritime patrol assets maintain visual and radar contact "
-                "with identified suspicious vessels. Maintain safe distance. Document activity "
-                "and report observations through established channels."
-            ),
-            required_assets=["maritime_patrol_asset", "coast_guard_liaison"],
-            assumptions=[
-                "Allied naval assets are available within 60 minutes",
-                "Rules of observation are clearly communicated",
-                "Vessels will not attempt evasion at high speed",
-            ],
-            estimated_time_minutes=60,
-            expected_effect="Direct observation and deterrence through presence",
-            risk_categories=["proximity_incident", "navigation_safety"],
-            escalation_risk=0.15,
-            civilian_risk=0.05,
-            logistics_burden=0.4,
-        ))
+    templates = select_templates(
+        cable_severed=cable_severed,
+        uav_threat=uav_threat,
+        convoy_active=convoy_active,
+        high_threat=threat_level in ("HIGH", "CRITICAL"),
+        critical_threat=threat_level == "CRITICAL",
+        friendly_support_available=friendly_support >= 1,
+        friendly_support_high=friendly_support >= 2,
+        support_gap=pressure_entities > max(1, friendly_support),
+        multi_contact_pressure=pressure_entities >= 3,
+    )
+    if friendly_support == 0:
+        templates = [tpl for tpl in templates if tpl.template_id != "COA-TPL-SHADOW"]
+    if friendly_support <= 1:
+        templates = [tpl for tpl in templates if tpl.template_id != "COA-TPL-COMBINED"]
 
-    # COA 3: Protect second cable
-    if cable_severed:
-        coas.append(CourseOfAction(
-            coa_id="COA-003",
-            title="Prioritize Protection of Second Subsea Cable",
-            description=(
-                "Given confirmed severance of Cable Alpha, recommend prioritizing "
-                "monitoring and protection of Cable Beta. Consider assigning the nearest "
-                "available allied maritime asset to observe the Cable Beta corridor. "
-                "Coordinate with cable operator for continuous integrity monitoring."
-            ),
-            required_assets=["maritime_patrol_asset", "cable_operator_liaison", "isr_uav"],
-            assumptions=[
-                "Cable Beta has not yet been compromised",
-                "Nearest allied asset can reach Cable Beta within 90 minutes",
-                "Cable operator can provide continuous integrity status",
-            ],
-            estimated_time_minutes=90,
-            expected_effect="Reduced risk of second cable compromise",
-            risk_categories=["asset_availability", "response_time"],
-            escalation_risk=0.10,
-            civilian_risk=0.0,
-            logistics_burden=0.5,
-        ))
+    # Build entity context for template binding
+    hostile_entities = []
+    for t in threats:
+        if t.threat_level.value in ("HIGH", "CRITICAL"):
+            hostile_events = [e for e in events if e.entity_id == t.entity_id]
+            name = hostile_events[0].attributes.get("name", t.entity_id) if hostile_events else t.entity_id
+            hostile_entities.append({"entity_id": t.entity_id, "name": name})
 
-    # COA 4: Coordinate civilian airspace safety
-    if uav_threat:
-        coas.append(CourseOfAction(
-            coa_id="COA-004",
-            title="Coordinate Civilian Airspace Safety Response",
-            description=(
-                "Recommend coordination with civil aviation authority to manage "
-                "airspace around affected airport. Support establishment of temporary "
-                "flight restrictions. Share available sensor data with air traffic control."
-            ),
-            required_assets=["airspace_coordinator", "atc_liaison", "sensor_data_feed"],
-            assumptions=[
-                "Civil aviation authority is responsive",
-                "UAV does not escalate to controlled airspace breach",
-                "Commercial diversions can be managed without major disruption",
-            ],
-            estimated_time_minutes=20,
-            expected_effect="Safe civilian airspace management during UAV incident",
-            risk_categories=["airspace_safety", "public_disruption"],
-            escalation_risk=0.05,
-            civilian_risk=0.1,
-            logistics_burden=0.2,
-        ))
+    # Find nearest infrastructure name for template binding
+    infra_name = "critical infrastructure"
+    if events:
+        for e in events:
+            if e.event_type == EventType.CABLE_SEVERANCE:
+                infra_name = "remaining subsea cable"
+                break
 
-    # COA 5: Border monitoring for convoy activity
-    if convoy_active:
-        coas.append(CourseOfAction(
-            coa_id="COA-005",
-            title="Increase Border Monitoring and Information Sharing",
-            description=(
-                "Recommend increased monitoring of border areas where convoy activity "
-                "has been reported. Coordinate information sharing with border security "
-                "and allied intelligence. Maintain an awareness-focused posture."
-            ),
-            required_assets=["border_patrol_liaison", "intelligence_team", "surveillance_asset"],
-            assumptions=[
-                "Convoy activity is observable through existing ISR",
-                "Border security forces can increase patrol frequency",
-                "Convoy movements remain indicators requiring corroboration",
-            ],
-            estimated_time_minutes=45,
-            expected_effect="Enhanced situational awareness of ground movements",
-            risk_categories=["intelligence_gap", "response_latency"],
-            escalation_risk=0.08,
-            civilian_risk=0.02,
-            logistics_burden=0.3,
-        ))
+    # Bind templates to produce concrete COAs
+    scenario_context = (
+        f"threat_level={threat_level}; cable_severed={cable_severed}; "
+        f"uav_threat={uav_threat}; convoy_active={convoy_active}; "
+        f"friendly_support={friendly_support}; pressure_entities={pressure_entities}"
+    )
 
-    # COA 6: Combined posture
-    if cable_severed and high_threats:
-        coas.append(CourseOfAction(
-            coa_id="COA-006",
-            title="Combined Observation, Cable Protection, and Border Monitoring",
-            description=(
-                "Recommend a combined approach: shadow suspicious vessels while "
-                "simultaneously increasing observation of Cable Beta and expanding "
-                "border monitoring. This is the most resource-intensive option but "
-                "addresses all identified threat vectors."
-            ),
-            required_assets=[
-                "maritime_patrol_asset", "isr_uav", "cable_operator_liaison",
-                "border_patrol_liaison", "intelligence_team", "coast_guard_liaison",
-            ],
-            assumptions=[
-                "Sufficient assets available for multi-axis response",
-                "Coordination staff can manage concurrent advisory workflows",
-                "Logistics support is available for extended operations",
-            ],
-            estimated_time_minutes=90,
-            expected_effect="Comprehensive coverage across all threat domains",
-            risk_categories=["resource_strain", "coordination_complexity"],
-            escalation_risk=0.20,
-            civilian_risk=0.05,
-            logistics_burden=0.8,
-        ))
+    coas = []
+    for tpl in templates:
+        coa = tpl.bind(
+            entities=hostile_entities,
+            infra=infra_name,
+            scenario_context=scenario_context,
+        )
+        coas.append(coa)
 
-    # Fallback: baseline monitoring
-    if not coas:
-        coas.append(CourseOfAction(
-            coa_id="COA-000",
-            title="Maintain Baseline Monitoring",
-            description="No elevated threat indicators detected. Recommend continuing routine monitoring.",
-            required_assets=["standard_watch_team"],
-            assumptions=["No change in current threat picture"],
-            estimated_time_minutes=0,
-            expected_effect="Continued situational awareness at baseline level",
-            risk_categories=["detection_lag"],
-            escalation_risk=0.0,
-            civilian_risk=0.0,
-            logistics_burden=0.0,
-        ))
+    # Validate against asset inventory
+    active_entity_ids = list({e.entity_id for e in events})
+    coas = validate_coa_set(
+        coas,
+        asset_inventory=asset_inventory,
+        active_entity_ids=active_entity_ids,
+        asset_states=merged_asset_states,
+        events=events,
+    )
 
-    required_assets = {asset for coa in coas for asset in coa.required_assets}
-    normalized_inventory = _normalize_asset_inventory(asset_inventory, required_assets)
-    result = [_apply_asset_feasibility(coa, normalized_inventory) for coa in coas]
-    logger.info("Generated %d rule-based COAs (cable=%s, uav=%s, convoy=%s)",
-                len(result), cable_severed, uav_threat, convoy_active)
-    return result
+    logger.info(
+        "Generated %d rule-based COAs from templates (cable=%s, uav=%s, convoy=%s, threat=%s, friendly=%d, pressure=%d)",
+        len(coas), cable_severed, uav_threat, convoy_active, threat_level, friendly_support, pressure_entities,
+    )
+    return coas

@@ -1,0 +1,309 @@
+<body>
+<div class="hdr">
+    <h1 data-i18n="header.title">COA ENGINE</h1>
+    <span class="badge b-err" id="badge" data-i18n="header.badge.disconnected">Disconnected</span>
+    <div class="llm-indicator idle" id="llm-indicator">LLM idle</div>
+    <div class="thr-badge">
+        <span class="thr-lbl" data-i18n="header.threat">Threat</span>
+        <span class="thr-val thr-LOW" id="thr-lvl">LOW</span>
+        <div><div class="thr-sub" id="thr-prb">--</div><div class="thr-sub" id="thr-ent"></div></div>
+    </div>
+    <span class="m" id="tick-d">Tick: --</span>
+    <div class="c">
+        <select id="ui-lang-sel" title="Interface language" style="margin-right:6px">
+            <option value="en">🇬🇧 EN</option>
+            <option value="fr">🇫🇷 FR</option>
+            <option value="de">🇩🇪 DE</option>
+            <option value="es">🇪🇸 ES</option>
+            <option value="it">🇮🇹 IT</option>
+            <option value="pt">🇵🇹 PT</option>
+            <option value="nl">🇳🇱 NL</option>
+            <option value="pl">🇵🇱 PL</option>
+            <option value="tr">🇹🇷 TR</option>
+            <option value="cs">🇨🇿 CS</option>
+            <option value="ro">🇷🇴 RO</option>
+            <option value="hu">🇭🇺 HU</option>
+            <option value="bg">🇧🇬 BG</option>
+            <option value="hr">🇭🇷 HR</option>
+            <option value="sk">🇸🇰 SK</option>
+            <option value="sl">🇸🇮 SL</option>
+            <option value="et">🇪🇪 ET</option>
+            <option value="lv">🇱🇻 LV</option>
+            <option value="lt">🇱🇹 LT</option>
+            <option value="da">🇩🇰 DA</option>
+            <option value="no">🇳🇴 NO</option>
+            <option value="is">🇮🇸 IS</option>
+            <option value="fi">🇫🇮 FI</option>
+            <option value="sv">🇸🇪 SV</option>
+            <option value="sq">🇦🇱 SQ</option>
+            <option value="mk">🇲🇰 MK</option>
+            <option value="me">🇲🇪 ME</option>
+            <option value="el">🇬🇷 EL</option>
+        </select>
+        <select id="scn-sel">
+            <option value="baltic_hybrid_001" data-i18n="scenario.baltic">Baltic Sea</option>
+            <option value="arctic_submarine_001" data-i18n="scenario.arctic">Arctic</option>
+            <option value="mediterranean_001" data-i18n="scenario.mediterranean">Mediterranean</option>
+        </select>
+        <input type="number" id="int-in" value="2" min="0.5" max="10" step="0.5" style="width:55px" title="Tick interval (s)">
+        <div class="seed-control" title="Seed controls reproducible scenario variation. Same seed = same scenario. Different seed = different but comparable scenario.">
+            <span class="seed-label">Scenario seed</span>
+            <input type="number" id="seed-in" value="42" min="0" max="9999" step="1" style="width:58px" title="Scenario seed">
+            <span class="seed-help" aria-label="Scenario seed help">i</span>
+        </div>
+        <button id="btn-go" data-i18n="btn.start">Start</button>
+        <button id="btn-stop" class="stop" style="display:none" data-i18n="btn.stop">Stop</button>
+    </div>
+</div>
+<div class="whybar"><b data-i18n="why.changed">Why Changed</b><span id="why-changed">No major change yet. Start the engine or inject a meaningful event.</span></div>
+<div class="main">
+    <div class="map-column">
+    <div class="map-wrap">
+        <div id="map"></div>
+        <div class="map-flash" id="map-flash"></div>
+        <div class="map-mode-banner" id="map-mode-banner" style="display:none"></div>
+        <div class="contact-detail-panel" id="contact-detail-panel">
+            <div class="cd-head">
+                <div class="cd-kicker" data-i18n="contact.details">Contact Details</div>
+                <div class="cd-sub" id="contact-detail-status">No contact selected</div>
+            </div>
+            <div class="cd-body" id="contact-detail-body"><div class="empty" data-i18n="contact.none_selected">No contact selected</div></div>
+        </div>
+        <div class="map-style">
+            <label for="map-style-sel" data-i18n="map.style">Map Style</label>
+            <select id="map-style-sel">
+                <option value="osm-standard" data-i18n="map.style.osm_standard">OpenStreetMap Standard</option>
+                <option value="osm-humanitarian" data-i18n="map.style.osm_humanitarian">OSM Humanitarian</option>
+                <option value="carto-light" data-i18n="map.style.carto_light">Carto Light</option>
+                <option value="carto-dark" data-i18n="map.style.carto_dark">Carto Dark</option>
+                <option value="open-topo" data-i18n="map.style.open_topo">OpenTopoMap</option>
+            </select>
+        </div>
+        <details class="filters" open>
+            <summary data-i18n="map.filter">Filter Units</summary>
+            <div><label><input type="checkbox" checked data-f="friendly" class="fcheck"> <span data-i18n="map.filter.friendly">Friendly</span></label><label><input type="checkbox" checked data-f="hostile" class="fcheck"> <span data-i18n="map.filter.hostile">Hostile</span></label><label><input type="checkbox" checked data-f="neutral" class="fcheck"> <span data-i18n="map.filter.neutral">Neutral</span></label></div>
+            <div><label><input type="checkbox" checked data-f="air" class="fcheck"> <span data-i18n="map.filter.air">Air</span></label><label><input type="checkbox" checked data-f="naval" class="fcheck"> <span data-i18n="map.filter.naval">Naval</span></label><label><input type="checkbox" checked data-f="land" class="fcheck"> <span data-i18n="map.filter.land">Land</span></label><label><input type="checkbox" checked data-f="infra" class="fcheck"> <span data-i18n="map.filter.infra">Infra</span></label></div>
+            <div><label><input type="checkbox" checked id="toggle-cable-routes"> <span data-i18n="map.filter.cable_routes">Show Cable Routes</span></label></div>
+            <div><label><input type="checkbox" id="toggle-live-ais"> <span data-i18n="map.filter.ais_contacts">AIS Contacts</span><span style="display:none">Show NOAA Replay Traffic</span></label><label><input type="checkbox" id="toggle-combat-contacts" checked> <span data-i18n="map.filter.combat_contacts">Combat System</span></label><label><input type="checkbox" id="toggle-sim-entities" checked> <span data-i18n="map.filter.sim_entities">Simulation Entities</span></label></div>
+        </details>
+    </div>
+    <div class="event-summary-panel" id="event-summary-panel">
+        <div class="esp-head">
+            <div>
+                <div class="esp-kicker">Event Summary</div>
+                <div class="esp-title">Latest LLM operational update</div>
+            </div>
+        </div>
+        <div class="esp-body" id="event-summary-body">No significant event summary yet.</div>
+    </div>
+    </div>
+    <div class="panel">
+        <div class="tab-bar">
+            <button class="tab-btn active" data-tab="guide" data-i18n="tab.guide">Guide</button>
+            <button class="tab-btn" data-tab="contacts" data-i18n="tab.contacts">Contacts <span class="tab-cnt" id="tab-ct">0</span></button>
+            <button class="tab-btn" data-tab="coas" data-i18n="tab.coas">COAs <span class="tab-cnt" id="tab-co">0</span></button>
+            <button class="tab-btn" data-tab="briefing" data-i18n="tab.briefing">Briefing</button>
+            <button class="tab-btn" data-tab="simulator" data-i18n="tab.simulator">Simulator</button>
+            <button class="tab-btn" data-tab="log" data-i18n="tab.log">Log</button>
+            <button class="tab-btn" data-tab="query" data-i18n="tab.query">Ask</button>
+            <button class="tab-btn" data-tab="timeline" data-i18n="tab.timeline">Timeline</button>
+        </div>
+        <div class="tab-content">
+            <div class="tab-pane active" id="pane-guide">
+                <div class="guide-grid">
+                    <div class="guide-card">
+                        <h3 data-i18n="guide.how_title">How The System Works</h3>
+                        <ol>
+                            <li data-i18n="guide.how.1">The engine emits or receives contacts such as vessels, UAVs, jamming reports, and cable events.</li>
+                            <li data-i18n="guide.how.2">Each new contact updates live state and contact history.</li>
+                            <li data-i18n="guide.how.3">The analysis loop recalculates anomaly indicators and entity threat probabilities.</li>
+                            <li data-i18n="guide.how.4">The COA engine generates rule-based options. It does not let the LLM invent actions.</li>
+                            <li data-i18n="guide.how.5">Each COA is simulated and scored. Then the allocator checks whether a coordinated bundle of multiple COAs is actually supportable with current assets.</li>
+                            <li data-i18n="guide.how.6">The system highlights the top recommendation and can generate a commander-style briefing on demand.</li>
+                        </ol>
+                    </div>
+                    <div class="guide-card">
+                        <h3 data-i18n="guide.control_title">What You Control</h3>
+                        <ul>
+                            <li data-i18n="guide.control.1"><b>Scenario:</b> chooses the synthetic operating area and scripted threat evolution.</li>
+                            <li data-i18n="guide.control.2"><b>Start / Stop:</b> starts or stops the live tick loop.</li>
+                            <li data-i18n="guide.control.3"><b>Map:</b> left side always shows the current contact picture.</li>
+                            <li data-i18n="guide.control.4"><b>NOAA Replay Traffic:</b> optional overlay of historical NOAA AIS tracks remapped into the scenario for demo feed behavior.</li>
+                            <li data-i18n="guide.control.5"><b>Simulator:</b> injects, edits, deletes, or scripts unit behavior.</li>
+                            <li data-i18n="guide.control.6"><b>Briefing:</b> generates a human-readable explanation of the current recommendation.</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="guide-grid" style="margin-top:10px">
+                    <div class="guide-card">
+                        <h3 data-i18n="guide.steps_title">Step By Step</h3>
+                        <ol>
+                            <li data-i18n="guide.steps.1">Open this dashboard and pick a scenario from the top bar.</li>
+                            <li data-i18n="guide.steps.2">Click <b>Start</b>. The engine begins ticking and the contact picture starts evolving.</li>
+                            <li data-i18n="guide.steps.3">Watch the map on the left and the <b>Threat</b> badge on the header. If it jumps to HIGH or CRITICAL, the analysis loop detected meaningful change.</li>
+                            <li data-i18n="guide.steps.4">Open <b>Contacts</b> to see active units and warning flags.</li>
+                            <li data-i18n="guide.steps.5">Open <b>COAs</b> to review ranked options. If a coordinated package exists, it appears above the individual COAs.</li>
+                            <li data-i18n="guide.steps.6">Open <b>Simulator</b> if you want to place a new unit on the map or force a maneuver, jamming event, or approach.</li>
+                            <li data-i18n="guide.steps.7">Click <b>Generate Briefing</b> when you want a concise operational summary.</li>
+                        </ol>
+                    </div>
+                    <div class="guide-callout">
+                        <p><b data-i18n="guide.callout.major_change">What counts as a major change?</b></p>
+                        <p data-i18n="guide.callout.major_change.text">Examples: a vessel turns toward infrastructure, loiters near a cable, a UAV appears near airport airspace, a jamming event is emitted, or the top recommended COA changes.</p>
+                        <p style="margin-top:8px"><b data-i18n="guide.callout.bundle_q">What is a bundle?</b> <span data-i18n="guide.callout.bundle_a">A bundle is just several advisory COAs that make sense together, for example shadow + ISR + cable protection. It is not a separate mysterious mode.</span></p>
+                        <p style="margin-top:8px"><b data-i18n="guide.callout.not_doing">What the system is not doing:</b> <span data-i18n="guide.callout.not_doing.text">it is not executing commands, not assigning weapons, and not autonomously authorizing engagement.</span></p>
+                    </div>
+                </div>
+            </div>
+            <div class="tab-pane" id="pane-contacts">
+                <div class="stats">
+                    <div class="st"><div class="v" id="s-ct">0</div><div class="l" data-i18n="contacts.stat.contacts">Contacts</div></div>
+                    <div class="st"><div class="v" id="s-tk">0</div><div class="l" data-i18n="contacts.stat.tracks">Tracks</div></div>
+                    <div class="st"><div class="v" id="s-co">0</div><div class="l" data-i18n="contacts.stat.coas">COAs</div></div>
+                    <div class="st"><div class="v" id="s-pr">0</div><div class="l" data-i18n="contacts.stat.processed">Processed</div></div>
+                </div>
+                <div id="ct-list"><div class="empty" data-i18n="contacts.empty">No contacts</div></div>
+            </div>
+            <div class="tab-pane" id="pane-coas"><div id="co-list"><div class="empty" data-i18n="coas.empty">Awaiting analysis</div></div></div>
+            <div class="tab-pane" id="pane-briefing">
+                <div class="bf-actions">
+                    <select id="briefing-lang" style="background:#1e293b;border:1px solid #334155;color:#d1d5db;padding:5px 8px;border-radius:3px;font-size:11px;margin-right:6px">
+                        <option value="en">🇬🇧 English</option>
+                        <option value="fr">🇫🇷 Français</option>
+                        <option value="de">🇩🇪 Deutsch</option>
+                        <option value="es">🇪🇸 Español</option>
+                        <option value="it">🇮🇹 Italiano</option>
+                        <option value="pt">🇵🇹 Português</option>
+                        <option value="nl">🇳🇱 Nederlands</option>
+                        <option value="pl">🇵🇱 Polski</option>
+                        <option value="tr">🇹🇷 Türkçe</option>
+                        <option value="cs">🇨🇿 Čeština</option>
+                        <option value="ro">🇷🇴 Română</option>
+                        <option value="hu">🇭🇺 Magyar</option>
+                        <option value="bg">🇧🇬 Български</option>
+                        <option value="hr">🇭🇷 Hrvatski</option>
+                        <option value="sk">🇸🇰 Slovenčina</option>
+                        <option value="sl">🇸🇮 Slovenščina</option>
+                        <option value="et">🇪🇪 Eesti</option>
+                        <option value="lv">🇱🇻 Latviešu</option>
+                        <option value="lt">🇱🇹 Lietuvių</option>
+                        <option value="da">🇩🇰 Dansk</option>
+                        <option value="no">🇳🇴 Norsk</option>
+                        <option value="is">🇮🇸 Íslenska</option>
+                        <option value="fi">🇫🇮 Suomi</option>
+                        <option value="sv">🇸🇪 Svenska</option>
+                        <option value="sq">🇦🇱 Shqip</option>
+                        <option value="mk">🇲🇰 Македонски</option>
+                        <option value="me">🇲🇪 Crnogorski</option>
+                        <option value="el">🇬🇷 Ελληνικά</option>
+                    </select><button class="bf-refresh" id="btn-briefing" data-i18n="briefing.generate">Generate Briefing</button>
+                    <button class="bf-pdf" id="btn-pdf" style="display:none" data-i18n="briefing.download_pdf">Download PDF</button>
+                    <button class="bf-pdf" id="btn-pdf-en" style="display:none;margin-left:4px" data-i18n="briefing.download_pdf_en">Download PDF (EN)</button>
+                </div>
+                <div id="bf-body" style="margin-top:10px"><div class="empty" data-i18n="briefing.empty">Click Generate Briefing to produce commander assessment</div></div>
+            </div>
+            <div class="tab-pane" id="pane-simulator">
+                <div class="guide-card combat-feed-card" style="margin-bottom:8px;padding:10px">
+                    <h3 data-i18n="sim.combat_feed">Combat Contact Feed</h3>
+                    <p data-i18n="sim.combat_feed_desc">Synthetic ship CMS tracks for air, surface, and subsurface contacts.</p>
+                    <div class="combat-feed-status" id="combat-feed-status" data-i18n="sim.combat_feed_disabled">Combat feed disabled</div>
+                    <div class="combat-feed-controls">
+                        <label><input type="checkbox" id="combat-feed-enabled"> <span data-i18n="sim.combat_feed_enabled">Combat feed enabled</span></label>
+                        <label><span data-i18n="sim.combat_density">Density</span>
+                            <select id="combat-feed-density">
+                                <option value="low">Low</option>
+                                <option value="medium" selected>Medium</option>
+                                <option value="high">High</option>
+                            </select>
+                        </label>
+                        <label><span data-i18n="sim.combat_scenario">Scenario</span>
+                            <select id="combat-feed-scenario">
+                                <option value="civilian_traffic">Civilian Traffic</option>
+                                <option value="mixed_traffic" selected>Mixed Traffic</option>
+                                <option value="high_threat_environment">High Threat Environment</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="combat-feed-actions">
+                        <button id="combat-inject-aircraft" type="button" data-i18n="sim.combat_aircraft">Add Aircraft</button>
+                        <button id="combat-inject-vessel" type="button" data-i18n="sim.combat_vessel">Add Vessel</button>
+                        <button id="combat-inject-submarine" type="button" data-i18n="sim.combat_submarine">Add Submarine</button>
+                        <button id="combat-inject-suspicious" type="button" data-i18n="sim.combat_suspicious">Inject Suspicious Contact</button>
+                    </div>
+                </div>
+                <div class="guide-card" style="margin-bottom:8px;padding:10px">
+                    <h3 data-i18n="sim.quick_scenarios">Quick Scenarios</h3>
+                    <p data-i18n="sim.quick_desc">Use these presets if you want the engine to react visibly. Hostile and unknown contacts raise pressure. Friendly patrol and ISR contacts improve available support and can unlock stronger coordinated packages.</p>
+                </div>
+                <div class="sim-playbook">
+                    <button class="sim-play" data-play="maritime_threat"><b data-i18n="sim.play.maritime_threat">Maritime Threat Near Cable</b><span data-i18n="sim.play.maritime_threat.desc">Inject hostile vessel near infrastructure with AIS off and low-speed suspicious behavior</span></button>
+                    <button class="sim-play" data-play="uav_airport"><b data-i18n="sim.play.uav_airport">UAV Near Airport</b><span data-i18n="sim.play.uav_airport.desc">Inject hostile UAV with airspace-risk signature</span></button>
+                    <button class="sim-play" data-play="ew_escalation"><b data-i18n="sim.play.ew_escalation">EW Escalation</b><span data-i18n="sim.play.ew_escalation.desc">Inject jamming source in the current operating area</span></button>
+                    <button class="sim-play" data-play="allied_isr"><b data-i18n="sim.play.allied_isr">Add Allied ISR Support</b><span data-i18n="sim.play.allied_isr.desc">Inject friendly UAV / support asset to test posture changes</span></button>
+                    <button class="sim-play" data-play="allied_patrol"><b data-i18n="sim.play.allied_patrol">Add Allied Patrol</b><span data-i18n="sim.play.allied_patrol.desc">Inject friendly patrol vessel into the area</span></button>
+                    <button class="sim-play" data-play="cable_alert"><b data-i18n="sim.play.cable_alert">Infrastructure Incident</b><span data-i18n="sim.play.cable_alert.desc">Inject cable-event style alert near map center</span></button>
+                </div>
+                <div class="sim-admin">
+                    <button class="sim-undo" id="sim-undo-last" data-i18n="sim.undo_last">Undo Last Injection</button>
+                    <button class="sim-reset" id="sim-reset-scenario" data-i18n="sim.reset_scenario">Reset Scenario</button>
+                </div>
+                <div class="sim-presets">
+                    <button class="sim-preset" data-preset="suspicious_vessel"><b data-i18n="sim.preset.suspicious_vessel">Suspicious Vessel</b><span data-i18n="sim.preset.suspicious_vessel.desc">Hostile vessel near current map center</span></button>
+                    <button class="sim-preset" data-preset="hostile_uav"><b data-i18n="sim.preset.hostile_uav">Hostile UAV</b><span data-i18n="sim.preset.hostile_uav.desc">UAV with elevated threat signature</span></button>
+                    <button class="sim-preset" data-preset="jamming_event"><b data-i18n="sim.preset.jamming_event">Jamming Event</b><span data-i18n="sim.preset.jamming_event.desc">Injects a jamming contact that affects anomalies</span></button>
+                    <button class="sim-preset" data-preset="cable_event"><b data-i18n="sim.preset.cable_event">Cable Event</b><span data-i18n="sim.preset.cable_event.desc">Injects a cable severance style event</span></button>
+                </div>
+                <div class="sim-quick-actions">
+                    <button class="sim-quick" data-quick="inject_preset" data-preset="suspicious_vessel"><b data-i18n="sim.quick.add_suspicious">Add suspicious vessel now</b><span data-i18n="sim.quick.add_suspicious.desc">Immediate hostile maritime contact at map center</span></button>
+                    <button class="sim-quick" data-quick="inject_preset" data-preset="hostile_uav"><b data-i18n="sim.quick.add_uav">Add hostile UAV now</b><span data-i18n="sim.quick.add_uav.desc">Immediate airborne contact near current area</span></button>
+                    <button class="sim-quick" data-quick="inject_preset" data-preset="jamming_event"><b data-i18n="sim.quick.trigger_jamming">Trigger jamming now</b><span data-i18n="sim.quick.trigger_jamming.desc">Immediate EW-style anomaly in the current area</span></button>
+                    <button class="sim-quick" data-quick="inject_preset" data-preset="cable_event"><b data-i18n="sim.quick.trigger_cable">Trigger cable alert now</b><span data-i18n="sim.quick.trigger_cable.desc">Immediate infrastructure incident near map center</span></button>
+                </div>
+                <button class="sim-adv-toggle" id="sim-adv-toggle" data-i18n="sim.show_advanced">Show Advanced Placement</button>
+                <div id="sim-status" class="sim-status" style="display:none"></div>
+                <button class="sim-add" id="sim-toggle" style="width:100%;padding:8px;margin-bottom:8px;display:none" data-i18n="sim.place_unit">Place Unit on Map</button>
+                <div id="sim-form" class="sim-form" style="display:none">
+                    <div><label data-i18n="sim.form.name">Label / Callsign</label><input id="si-name"></div>
+                    <div><label data-i18n="sim.form.type">Type</label><select id="si-type"><option value="vessel" data-i18n="sim.option.vessel">Vessel</option><option value="aircraft">Aircraft</option><option value="uav" data-i18n="sim.option.uav">Drone / UAV</option><option value="submarine" data-i18n="sim.option.submarine">Submarine</option><option value="ground_unit">Ground Unit</option><option value="convoy" data-i18n="sim.option.convoy">Convoy</option><option value="isr_asset">ISR Asset</option><option value="neutral_vessel">Neutral Vessel</option><option value="event_marker">Event Marker</option><option value="jamming" data-i18n="sim.option.jamming">Jamming</option><option value="cable_event" data-i18n="sim.option.cable_event">Cable Event</option></select></div>
+                    <div><label data-i18n="sim.form.allegiance">Allegiance</label><select id="si-ally"><option value="hostile" data-i18n="sim.option.hostile">Red / Hostile</option><option value="friendly" data-i18n="sim.option.friendly">Blue / Friendly</option><option value="neutral" data-i18n="sim.option.neutral">Neutral</option><option value="infrastructure">Infrastructure</option></select></div>
+                    <div><label data-i18n="sim.form.speed">Speed (kts)</label><input id="si-spd" type="number" min="0" max="60" step="0.1"></div>
+                    <div><label data-i18n="sim.form.heading">Heading</label><input id="si-hdg" type="number" min="0" max="359" step="1"></div>
+                    <div><label data-i18n="sim.form.latitude">Latitude</label><input id="si-lat" type="number" step="0.0001"></div>
+                    <div><label data-i18n="sim.form.longitude">Longitude</label><input id="si-lon" type="number" step="0.0001"></div>
+                    <div><label data-i18n="sim.form.jamming_radius">Jamming Radius (nm)</label><input id="si-rad" type="number" min="1" max="80" step="1"></div>
+                    <div><label data-i18n="sim.form.ais_off">AIS Off</label><select id="si-ais"><option value="false" data-i18n="common.no">No</option><option value="true" data-i18n="common.yes">Yes</option></select></div>
+                    <div class="full"><label data-i18n="sim.form.position">GPS Position</label><input id="si-pos" readonly></div>
+                    <div class="sim-btns full">
+                        <button class="sim-add" id="sim-add-btn" data-i18n="sim.form.add_unit">Add Unit</button>
+                        <button class="sim-cancel" id="sim-cancel-btn" data-i18n="sim.form.cancel">Cancel</button>
+                    </div>
+                </div>
+                <div id="sim-units"></div>
+            </div>
+            <div class="tab-pane" id="pane-log"><div class="elog" id="elog"></div></div>
+            <div class="tab-pane" id="pane-query">
+                <div class="query-disclaimer">
+                    <span class="query-disclaimer-icon">&#x2139;&#xFE0F;</span>
+                    <div><b id="query-disclaimer-title" data-i18n="query.disclaimer_title">Advisory only.</b> <span id="query-disclaimer-body" data-i18n="query.disclaimer_body">LLM explains; forecasts are simulation-based. Responses do not authorize decisions or actions.</span></div>
+                </div>
+                <div class="query-bar">
+                    <input type="text" id="query-input" data-i18n-placeholder="query.input_placeholder" placeholder="Ask about the current situation, a COA, or a what-if scenario..." autocomplete="off">
+                    <button id="query-ask-btn" data-i18n="query.ask_btn">Ask</button>
+                </div>
+                <div class="query-suggestions">
+                    <button class="query-chip" data-i18n="query.chip.threat_label" data-q-key="query.chip.threat_question" data-q="What is the current threat level?">Threat level</button>
+                    <button class="query-chip" data-i18n="query.chip.coa_label" data-q-key="query.chip.coa_question" data-q="Why is this COA recommended?">Why this COA?</button>
+                    <button class="query-chip" data-i18n="query.chip.changed_label" data-q-key="query.chip.changed_question" data-q="What changed recently?">What changed?</button>
+                    <button class="query-chip" data-i18n="query.chip.roe_label" data-q-key="query.chip.roe_question" data-q="Which COAs require authorization?">ROE status</button>
+                    <button class="query-chip" data-i18n="query.chip.cable_label" data-q-key="query.chip.cable_question" data-q="What if the cable is severed?">Cable what-if</button>
+                    <button class="query-chip" data-i18n="query.chip.outcome_label" data-q-key="query.chip.outcome_question" data-q="What happens if we choose the recommended COA?">COA outcome</button>
+                </div>
+                <div id="query-response"></div>
+            </div>
+            <div class="tab-pane" id="pane-timeline">
+                <div id="scn-meta" class="scn-info"></div>
+                <div id="tl-list" class="timeline"><div class="empty">Start a scenario to see the stimuli timeline</div></div>
+            </div>
+        </div>
+    </div>
+</div>
