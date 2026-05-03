@@ -16,6 +16,30 @@ def _recommendation_id(recommendation: dict | None) -> str | None:
     return recommendation["recommended"]["coa"]["coa_id"]
 
 
+def _target_snapshot(targets: list[dict]) -> list[tuple[str, str, str, str]]:
+    return [
+        (
+            item["id"],
+            item["priority_level"],
+            item["recommended_action"],
+            item["roe_status"],
+        )
+        for item in targets
+    ]
+
+
+def _fusion_snapshot(tracks: list[dict]) -> list[tuple[str, str, int, tuple[str, ...]]]:
+    return [
+        (
+            item["primary_entity_id"],
+            item["track_type"],
+            item["source_count"],
+            tuple(item["sources"]),
+        )
+        for item in tracks
+    ]
+
+
 def test_legacy_analysis_and_coa_routes_use_same_canonical_outputs(client, baltic_events):
     payload = _events_payload(baltic_events)
 
@@ -68,6 +92,9 @@ def test_live_engine_analysis_matches_legacy_route_when_given_same_live_events(c
         (item["coa"]["coa_id"], item["coa"]["roe_status"])
         for item in legacy["scored_coas"]
     ]
+    assert _fusion_snapshot(live["fused_tracks"]) == _fusion_snapshot(legacy["fused_tracks"])
+    assert _target_snapshot(live["targets"]) == _target_snapshot(legacy["targets"])
+    assert _target_snapshot(live["top_targets"]) == _target_snapshot(legacy["top_targets"])
     assert _recommendation_id(live["recommendation"]) == _recommendation_id(legacy["recommendation"])
 
 
@@ -82,4 +109,3 @@ def test_analysis_routes_do_not_call_llm(client, baltic_events, monkeypatch):
     assert client.post("/v1/coa/generate", json=payload).status_code == 200
     assert client.post("/v1/coa/simulation/run", json=payload).status_code == 200
     assert client.post("/v1/coa/recommendation/run", json=payload).status_code == 200
-

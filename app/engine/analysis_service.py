@@ -28,6 +28,8 @@ from ..core.schemas import (
     ThreatResult,
     TrackInfo,
 )
+from .fusion import FusedTrack, build_fused_tracks
+from .targeting import Target, build_targets
 from .anomaly_detection import detect_anomalies
 from .coa_generation import generate_coas
 from .entity_tracking import build_tracks
@@ -61,7 +63,10 @@ class AnalysisResult:
     context: AnalysisContext
     features: list[FeatureVector] = field(default_factory=list)
     anomalies: list[AnomalyResult] = field(default_factory=list)
+    fused_tracks: list[FusedTrack] = field(default_factory=list)
     threats: list[ThreatResult] = field(default_factory=list)
+    targets: list[Target] = field(default_factory=list)
+    top_targets: list[Target] = field(default_factory=list)
     coas: list[CourseOfAction] = field(default_factory=list)
     simulations: list[SimulationResult] = field(default_factory=list)
     scored_coas: list[ScoredCOA] = field(default_factory=list)
@@ -109,7 +114,27 @@ def run_canonical_analysis(
 
     features = compute_features(events, context.infrastructure or None)
     anomalies = detect_anomalies(events, features)
-    threats = assess_threats(events, features, anomalies)
+    fused_tracks = build_fused_tracks(
+        events=events,
+        contacts=context.active_contacts,
+        anomalies=anomalies,
+        features=features,
+    )
+    threats = assess_threats(events, features, anomalies, fused_tracks=fused_tracks)
+    fused_tracks = build_fused_tracks(
+        events=events,
+        contacts=context.active_contacts,
+        anomalies=anomalies,
+        threats=threats,
+        features=features,
+    )
+    targets = build_targets(
+        context,
+        features=features,
+        anomalies=anomalies,
+        threats=threats,
+        fused_tracks=fused_tracks,
+    )
     coas = generate_coas(
         events,
         threats,
@@ -131,7 +156,10 @@ def run_canonical_analysis(
 
     result.features = features
     result.anomalies = anomalies
+    result.fused_tracks = fused_tracks
     result.threats = threats
+    result.targets = targets
+    result.top_targets = targets[:5]
     result.coas = coas
     result.simulations = simulations
     result.scored_coas = scored
@@ -142,13 +170,14 @@ def run_canonical_analysis(
         result.temporal = analyze_temporal_patterns(events)
 
     logger.info(
-        "Canonical analysis: source=%s tick=%s events=%d threats=%d coas=%d recommendation=%s",
+        "Canonical analysis: source=%s tick=%s events=%d fused_tracks=%d threats=%d targets=%d coas=%d recommendation=%s",
         context.source,
         context.tick,
         len(events),
+        len(fused_tracks),
         len(threats),
+        len(targets),
         len(scored),
         recommendation.recommended.coa.coa_id if recommendation and recommendation.recommended else None,
     )
     return result
-

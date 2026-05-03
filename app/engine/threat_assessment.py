@@ -7,6 +7,7 @@ from ..core.config import settings
 from ..core.constants import BEHAVIOR_WEIGHTS, EntityType, EventType, ThreatLevel
 from ..core.schemas import AnomalyResult, FeatureVector, OperationalEvent, ThreatResult
 from .behavior_features import BehaviorFeatures, extract_behavior_features
+from .fusion import FusedTrack
 
 logger = logging.getLogger("coa_engine.engine.threat_assessment")
 
@@ -44,6 +45,7 @@ def assess_threats(
     events: list[OperationalEvent],
     features: list[FeatureVector],
     anomalies: list[AnomalyResult],
+    fused_tracks: list[FusedTrack] | None = None,
 ) -> list[ThreatResult]:
     """Aggregate anomaly scores by entity and produce one ThreatResult per relevant entity."""
     entity_anomalies: dict[str, list[AnomalyResult]] = defaultdict(list)
@@ -59,6 +61,10 @@ def assess_threats(
         entity_events[e.entity_id].append(e)
 
     entity_behavior = extract_behavior_features(events)
+    fused_by_entity: dict[str, FusedTrack] = {}
+    for track in fused_tracks or []:
+        for entity_id in track.correlated_entities:
+            fused_by_entity.setdefault(entity_id, track)
 
     has_cable_severance = any(e.event_type == EventType.CABLE_SEVERANCE for e in events)
 
@@ -153,6 +159,19 @@ def assess_threats(
             drivers.append("Confirmed jamming activity in area")
         if avg_allied > 0.3:
             drivers.append(f"Allied deterrence effect (proximity score: {avg_allied:.0%})")
+
+        fused = fused_by_entity.get(entity_id)
+        if fused is not None:
+            probability += min(max(fused.source_count - 1, 0) * 0.02, 0.06)
+            if fused.fused_confidence > 0.7:
+                probability += min((fused.fused_confidence - 0.7) * 0.2, 0.06)
+            confidence = min(max(confidence, fused.fused_confidence) + min(max(fused.source_count - 1, 0) * 0.02, 0.08), 1.0)
+            if fused.source_count >= 2:
+                drivers.append(f"Correlated across {fused.source_count} independent sources")
+            if "sigint" in " ".join(fused.sources) or "jamming" in " ".join(fused.sources):
+                drivers.append("Electronic or signals indicators corroborate the track")
+            if fused.anomaly_support >= 0.6:
+                drivers.append("Fused track aligns with elevated anomaly indicators")
 
         # Behavior-intent boosts (driven by BEHAVIOR_WEIGHTS config)
         bf = entity_behavior.get(entity_id, BehaviorFeatures())

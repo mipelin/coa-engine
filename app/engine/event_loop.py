@@ -182,6 +182,8 @@ class EventLoop:
         )
         threats = analysis.threats
         anomalies = analysis.anomalies
+        fused_tracks = analysis.fused_tracks
+        targets = analysis.targets
         coas = analysis.coas
         sims = analysis.simulations
         scored = analysis.scored_coas
@@ -203,7 +205,14 @@ class EventLoop:
         # Update state and detect changes
         previous_state = self._store.state
         threat_changed, coa_changed, roe_changed = self._store.update_analysis(
-            threats, anomalies, scored, rec, coas, sims,
+            threats,
+            anomalies,
+            scored,
+            rec,
+            coas,
+            sims,
+            targets=targets,
+            fused_tracks=fused_tracks,
         )
 
         # Publish change events

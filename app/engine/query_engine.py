@@ -791,6 +791,18 @@ def _forecast_to_text(f: ForecastResult) -> str:
         f"Horizon: {f.tick_horizon} ticks (~{f.tick_horizon * 2} min)",
         f"Confidence: {f.confidence}",
     ]
+    if f.steps:
+        lines.append(f"Multi-step trajectory ({len(f.steps)} steps):")
+        for s in f.steps:
+            rec_title = s.recommendation.get("title", "none") if s.recommendation else "none"
+            lines.append(
+                f"  Step {s.tick_index} ({s.timestamp}): "
+                f"threat={s.threat_level}, contacts={s.contacts}, "
+                f"recommendation={rec_title}"
+            )
+            if s.key_changes:
+                for change in s.key_changes:
+                    lines.append(f"    - {change}")
     if f.key_risks:
         lines.append("Key risks:")
         for r in f.key_risks:
@@ -804,7 +816,7 @@ def _answer_forecast(question: str, lang: str = "en") -> dict[str, Any]:
     """Handle a forecasting question. LLM may rephrase but never invents."""
     forecast = route_forecast_question(question)
     sources = list(forecast.based_on) + ["forecasting"]
-    structured = {
+    structured: dict[str, Any] = {
         "summary": forecast.summary,
         "expected_threat_trend": forecast.expected_threat_trend,
         "key_risks": forecast.key_risks,
@@ -814,6 +826,10 @@ def _answer_forecast(question: str, lang: str = "en") -> dict[str, Any]:
         "threat_level_start": forecast.threat_level_start,
         "threat_level_end": forecast.threat_level_end,
     }
+    if forecast.steps:
+        structured["steps"] = len(forecast.steps)
+        structured["threat_trend"] = forecast.threat_trend
+        structured["recommendation_changes"] = forecast.recommendation_changes
 
     llm = get_llm_client()
     if not llm.enabled:

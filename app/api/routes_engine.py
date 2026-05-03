@@ -19,13 +19,21 @@ from ..engine.contact_engine import EngineMode, get_contact_engine
 from ..engine.ais_feed import get_ais_feed
 from ..engine.engine_scheduler import get_engine_scheduler
 from ..engine.event_loop import get_event_loop
+from ..engine.fusion import serialize_fused_tracks
 from ..engine.geo_validation import validate_placement
 from ..engine.noaa_replay import get_noaa_replay_feed
+from ..engine.forecasting import (
+    ForecastResult,
+    forecast_baseline,
+    forecast_with_event,
+    run_forecast,
+)
 from ..engine.query_engine import answer_question
 from ..engine.scenario_generator import ScenarioGenerator
-from ..engine.state_store import get_state_store
+from ..engine.state_store import StateStore, get_state_store
 from ..engine.llm_client import get_llm_client
 from ..engine.llm_orchestrator import get_llm_orchestrator
+from ..engine.targeting import serialize_targets
 
 router = APIRouter(prefix="/engine", tags=["engine"])
 
@@ -178,6 +186,8 @@ async def full_analysis():
     contacts = store.get_contacts()
     threats = store.get_threats()
     anomalies = store.get_anomalies() if hasattr(store, "get_anomalies") else []
+    fused_tracks = store.get_fused_tracks() if hasattr(store, "get_fused_tracks") else []
+    targets = store.get_targets() if hasattr(store, "get_targets") else []
     scored = store.get_scored_coas()
     rec = store.get_recommendation()
     tracks = store.get_tracks()
@@ -187,6 +197,9 @@ async def full_analysis():
         "contacts": [c.model_dump(mode="json") for c in contacts],
         "threats": [t.model_dump(mode="json") for t in threats],
         "anomalies": [a.model_dump(mode="json") for a in anomalies],
+        "fused_tracks": serialize_fused_tracks(fused_tracks),
+        "targets": serialize_targets(targets),
+        "top_targets": serialize_targets(targets[:5]),
         "scored_coas": [s.model_dump(mode="json") for s in scored],
         "roe_summary": _roe_summary(scored),
         "recommendation": rec.model_dump(mode="json") if rec else None,
@@ -542,6 +555,138 @@ async def translate_ui(payload: dict):
         return {"translations": {}}
     translated = translate_ui_strings(strings, language)
     return {"translations": translated or {}}
+
+
+# ---- Forecasting ----
+
+
+def _forecast_steps_to_dicts(steps) -> list[dict]:
+    return [
+        {
+            "tick_index": s.tick_index,
+            "timestamp": s.timestamp,
+            "contacts": s.contacts,
+            "threat_level": s.threat_level,
+            "threats": s.threats,
+            "targets": s.targets,
+            "coas": s.coas,
+            "recommendation": s.recommendation,
+            "fused_tracks": s.fused_tracks,
+            "key_changes": s.key_changes,
+        }
+        for s in steps
+    ]
+
+
+@router.post("/forecast")
+async def run_forecast_endpoint(payload: dict):
+    """Run a multi-step deterministic scenario forecast through the full pipeline.
+
+    Supports baseline forecasting and what-if event injection.
+    """
+    mode = payload.get("mode", "baseline")
+    horizon = min(int(payload.get("horizon", 10)), 30)
+
+    if mode == "what_if":
+        event_action = payload.get("event_action", "new_hostile")
+        event_entity = payload.get("event_entity")
+        event_lat = payload.get("event_lat")
+        event_lon = payload.get("event_lon")
+        result = forecast_with_event(
+            event_action=event_action,
+            event_entity=event_entity,
+            event_lat=event_lat,
+            event_lon=event_lon,
+            horizon_ticks=horizon,
+        )
+    else:
+        result = forecast_baseline(horizon_ticks=horizon)
+
+    response: dict = {
+        "summary": result.summary,
+        "expected_threat_trend": result.expected_threat_trend,
+        "confidence": result.confidence,
+        "key_risks": result.key_risks,
+        "expected_outcome": result.expected_outcome,
+        "threat_level_start": result.threat_level_start,
+        "threat_level_end": result.threat_level_end,
+        "tick_horizon": result.tick_horizon,
+        "contacts_start": result.contacts_start,
+        "contacts_end": result.contacts_end,
+        "based_on": result.based_on,
+    }
+    if result.steps:
+        response["steps"] = _forecast_steps_to_dicts(result.steps)
+        response["horizon"] = result.horizon
+        response["initial_state_snapshot"] = result.initial_state_snapshot
+        response["final_state_summary"] = result.final_state_summary
+        response["threat_trend"] = result.threat_trend
+        response["recommendation_changes"] = result.recommendation_changes
+    if result.stimuli_fired:
+        response["stimuli_fired"] = result.stimuli_fired
+    return response
+
+
+@router.post("/forecast/pipeline")
+async def run_pipeline_forecast(payload: dict):
+    """Run a multi-step forecast through the full canonical pipeline.
+
+    This always uses the pipeline path (not simulation fallback).
+    Requires active contacts in the engine state.
+    """
+    from ..engine.analysis_service import AnalysisContext
+    from ..engine.forecasting import _build_analysis_context
+
+    horizon = min(int(payload.get("horizon", 5)), 30)
+    delta_minutes = float(payload.get("delta_minutes", 2.0))
+    event_action = payload.get("event_action")
+    event_entity = payload.get("event_entity")
+    event_lat = payload.get("event_lat")
+    event_lon = payload.get("event_lon")
+
+    context = _build_analysis_context()
+    if context is None:
+        return {
+            "status": "error",
+            "message": "No active contacts in engine state. Inject contacts first.",
+        }
+
+    injected_events = None
+    injected_contacts = None
+    if event_action:
+        from datetime import datetime, timezone
+        from ..engine.forecasting import _make_injected_events, _make_injected_contacts
+
+        entity_id = event_entity or "hypothetical-001"
+        lat = float(event_lat) if event_lat is not None else 57.5
+        lon = float(event_lon) if event_lon is not None else 19.0
+        tick_time = datetime.now(timezone.utc)
+        injected_events = _make_injected_events(event_action, entity_id=entity_id, lat=lat, lon=lon, tick_time=tick_time)
+        injected_contacts = _make_injected_contacts(event_action, entity_id=entity_id, lat=lat, lon=lon, tick_time=tick_time)
+
+    result = run_forecast(
+        context,
+        horizon=horizon,
+        delta_minutes=delta_minutes,
+        injected_events=injected_events,
+        injected_contacts=injected_contacts,
+    )
+
+    return {
+        "status": "ok",
+        "summary": result.summary,
+        "horizon": result.horizon,
+        "steps": _forecast_steps_to_dicts(result.steps),
+        "initial_state_snapshot": result.initial_state_snapshot,
+        "final_state_summary": result.final_state_summary,
+        "threat_trend": result.threat_trend,
+        "recommendation_changes": result.recommendation_changes,
+        "confidence": result.confidence,
+        "expected_threat_trend": result.expected_threat_trend,
+        "key_risks": result.key_risks,
+        "expected_outcome": result.expected_outcome,
+        "based_on": result.based_on,
+    }
 
 
 # ---- Natural Language Query ----

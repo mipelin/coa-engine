@@ -23,6 +23,8 @@ from ..core.schemas import (
     SimulationResult,
     ThreatResult,
 )
+from .targeting import Target
+from .fusion import FusedTrack
 from .asset_state import asset_state_from_inventory
 
 logger = logging.getLogger("coa_engine.engine.state_store")
@@ -50,6 +52,8 @@ class StateStore:
         self._asset_states: dict[str, AssetState] = {}
         self._threats: list[ThreatResult] = []
         self._anomalies: list[AnomalyResult] = []
+        self._fused_tracks: list[FusedTrack] = []
+        self._targets: list[Target] = []
         self._scored_coas: list[ScoredCOA] = []
         self._recommendation: Recommendation | None = None
         self._simulations: list[SimulationResult] = []
@@ -380,11 +384,15 @@ class StateStore:
         recommendation: Recommendation,
         coas: list[CourseOfAction],
         simulations: list[SimulationResult],
+        targets: list[Target] | None = None,
+        fused_tracks: list[FusedTrack] | None = None,
     ) -> tuple[bool, bool, bool]:
         """Update analysis state. Returns (threat_changed, coa_changed, roe_changed)."""
         with self._lock:
             self._threats = threats
             self._anomalies = anomalies
+            self._fused_tracks = list(fused_tracks or [])
+            self._targets = list(targets or [])
             self._scored_coas = scored
             self._recommendation = recommendation
             self._coas = coas
@@ -431,6 +439,14 @@ class StateStore:
         with self._lock:
             return list(self._anomalies)
 
+    def get_targets(self) -> list[Target]:
+        with self._lock:
+            return list(self._targets)
+
+    def get_fused_tracks(self) -> list[FusedTrack]:
+        with self._lock:
+            return list(self._fused_tracks)
+
     def get_scored_coas(self) -> list[ScoredCOA]:
         with self._lock:
             return list(self._scored_coas)
@@ -476,6 +492,8 @@ class StateStore:
             self._asset_states.clear()
             self._threats.clear()
             self._anomalies.clear()
+            self._fused_tracks.clear()
+            self._targets.clear()
             self._scored_coas.clear()
             self._coas.clear()
             self._simulations.clear()

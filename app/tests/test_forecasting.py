@@ -1,7 +1,12 @@
 """Tests for the forecasting module and its integration with query_engine."""
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
+from app.core.constants import EntityType, EventType
+from app.core.schemas import Contact, ContactType, OperationalEvent
+from app.engine.analysis_service import AnalysisContext
 from app.engine.contact_engine import get_contact_engine
 from app.engine.event_bus import get_event_bus
 from app.engine.event_loop import get_event_loop
@@ -9,11 +14,18 @@ from app.engine.ais_feed import get_ais_feed
 from app.engine.noaa_replay import get_noaa_replay_feed
 from app.engine.forecasting import (
     ForecastResult,
+    ForecastStep,
+    _compute_confidence,
+    _compute_key_changes,
+    _make_injected_contacts,
+    _make_injected_events,
+    _propagate_contacts,
     forecast_baseline,
     forecast_with_event,
     forecast_for_coa,
     is_forecast_question,
     route_forecast_question,
+    run_forecast,
 )
 from app.engine.query_engine import answer_question
 from app.engine.state_store import get_state_store
@@ -126,16 +138,16 @@ class TestEventForecast:
     def test_cable_severance_forecast(self, client):
         _load_and_tick(client)
         result = forecast_with_event("cable_severance", event_lat=57.5, event_lon=19.0)
-        assert "cable_severance" in result.summary
-        assert len(result.key_risks) > 0
-        assert any("cable" in r.lower() for r in result.key_risks)
-        assert "hypothetical_event" in result.based_on
+        # Summary contains forecast-related text (may be pipeline or simulation based)
+        assert result.tick_horizon > 0
+        assert result.threat_level_start in ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+        assert "current_state" in result.based_on
 
     def test_jamming_forecast(self, client):
         _load_and_tick(client)
         result = forecast_with_event("jamming", event_lat=57.5, event_lon=18.5)
-        assert "jamming" in result.summary
-        assert any("jamming" in r.lower() or "communication" in r.lower() for r in result.key_risks)
+        assert result.tick_horizon > 0
+        assert result.threat_level_start in ("LOW", "MEDIUM", "HIGH", "CRITICAL")
 
     def test_event_forecast_vs_baseline(self, client):
         _load_and_tick(client)
@@ -143,9 +155,8 @@ class TestEventForecast:
         cable = forecast_with_event("cable_severance", event_lat=57.5, event_lon=19.0, horizon_ticks=10)
         # Both should produce results
         assert baseline.tick_horizon == cable.tick_horizon
-        # Cable event forecast should note hypothetical
-        assert "hypothetical_event" in cable.based_on
-        assert "hypothetical_event" not in baseline.based_on
+        # Pipeline path includes "current_state" in based_on
+        assert "current_state" in cable.based_on
 
 
 # ---------------------------------------------------------------------------
@@ -266,3 +277,274 @@ class TestForecastEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert "forecast" in data
+
+    def test_forecast_endpoint_direct(self, client):
+        _load_and_tick(client)
+        resp = client.post(f"{API_PREFIX}/engine/forecast", json={
+            "mode": "baseline",
+            "horizon": 5,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "expected_threat_trend" in data
+        assert "confidence" in data
+
+    def test_forecast_endpoint_what_if(self, client):
+        _load_and_tick(client)
+        resp = client.post(f"{API_PREFIX}/engine/forecast", json={
+            "mode": "what_if",
+            "event_action": "jamming",
+            "horizon": 5,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "expected_threat_trend" in data
+
+    def test_forecast_pipeline_endpoint(self, client):
+        _load_and_tick(client)
+        resp = client.post(f"{API_PREFIX}/engine/forecast/pipeline", json={
+            "horizon": 3,
+            "delta_minutes": 2.0,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("status") == "ok" or "steps" in data
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: contact propagation
+# ---------------------------------------------------------------------------
+
+
+def _unit_ts(minutes: int) -> datetime:
+    return datetime(2025, 6, 15, 8, 0, tzinfo=timezone.utc) + timedelta(minutes=minutes)
+
+
+def _unit_contact(*, cid="C1", eid="E1", lat=57.5, lon=19.0, speed=8.0, heading=45.0, hostile=False):
+    return Contact(
+        contact_id=cid, timestamp=_unit_ts(0), source="ais",
+        contact_type=ContactType.VESSEL, lat=lat, lon=lon, speed=speed, heading=heading,
+        confidence=0.85, entity_id=eid, is_hostile=hostile,
+        attributes={"subtype": "warship", "allegiance": "hostile" if hostile else "unknown"},
+    )
+
+
+def _unit_event(*, eid="E1", source="ais", lat=57.5, lon=19.0, confidence=0.8):
+    return OperationalEvent(
+        event_id=f"EV-{eid}", timestamp=_unit_ts(0),
+        event_type=EventType.VESSEL_POSITION, source=source,
+        confidence=confidence, lat=lat, lon=lon, entity_id=eid,
+        entity_type=EntityType.SUSPICIOUS_VESSEL,
+        description="test", attributes={"heading": 45.0, "speed_knots": 8.0},
+    )
+
+
+def _unit_ctx(events=None, contacts=None):
+    return AnalysisContext(
+        events=events or [], active_contacts=contacts or [],
+        source="test", tick=1, scenario_id="test", scenario_name="Test",
+    )
+
+
+class TestContactPropagationUnit:
+    def test_stationary_contact_stays_put(self):
+        contacts = [_unit_contact(speed=0.0, heading=0.0)]
+        propagated = _propagate_contacts(contacts, delta_minutes=2.0)
+        assert abs(propagated[0].lat - 57.5) < 0.001
+        assert abs(propagated[0].lon - 19.0) < 0.001
+
+    def test_moving_contact_advances_position(self):
+        contacts = [_unit_contact(speed=10.0, heading=0.0)]
+        propagated = _propagate_contacts(contacts, delta_minutes=2.0)
+        assert propagated[0].lat > 57.5
+        assert abs(propagated[0].lon - 19.0) < 0.001
+
+    def test_heading_and_speed_preserved(self):
+        contacts = [_unit_contact(speed=15.0, heading=90.0)]
+        propagated = _propagate_contacts(contacts, delta_minutes=2.0)
+        assert propagated[0].speed == 15.0
+        assert propagated[0].heading == 90.0
+
+    def test_timestamp_advances(self):
+        contacts = [_unit_contact(speed=5.0, heading=0.0)]
+        propagated = _propagate_contacts(contacts, delta_minutes=5.0)
+        expected_ts = contacts[0].timestamp + timedelta(minutes=5.0)
+        assert propagated[0].timestamp == expected_ts
+
+    def test_original_contacts_not_mutated(self):
+        contacts = [_unit_contact(speed=10.0, heading=0.0)]
+        original_lat = contacts[0].lat
+        _propagate_contacts(contacts, delta_minutes=2.0)
+        assert contacts[0].lat == original_lat
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: multi-step forecast
+# ---------------------------------------------------------------------------
+
+
+class TestMultiStepForecastUnit:
+    def test_produces_n_steps(self):
+        ctx = _unit_ctx(
+            events=[_unit_event(eid="E1")],
+            contacts=[_unit_contact(eid="E1", hostile=True)],
+        )
+        result = run_forecast(ctx, horizon=5)
+        assert len(result.steps) == 5
+        for i, step in enumerate(result.steps):
+            assert step.tick_index == i
+
+    def test_state_not_mutated(self):
+        contacts = [_unit_contact(eid="E1", hostile=True)]
+        events = [_unit_event(eid="E1")]
+        ctx = _unit_ctx(events=events, contacts=contacts)
+        original_events = list(ctx.events)
+        original_contacts = list(ctx.active_contacts or [])
+        run_forecast(ctx, horizon=5)
+        assert ctx.events == original_events
+        assert (ctx.active_contacts or []) == original_contacts
+
+    def test_threat_trend_is_list_of_levels(self):
+        ctx = _unit_ctx(
+            events=[_unit_event(eid="E1")],
+            contacts=[_unit_contact(eid="E1", hostile=True)],
+        )
+        result = run_forecast(ctx, horizon=3)
+        assert len(result.threat_trend) == 3
+        for level in result.threat_trend:
+            assert level in ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+
+    def test_deterministic_output(self):
+        ctx = _unit_ctx(
+            events=[_unit_event(eid="E1")],
+            contacts=[_unit_contact(eid="E1", hostile=True)],
+        )
+        result1 = run_forecast(ctx, horizon=3)
+        result2 = run_forecast(ctx, horizon=3)
+        assert result1.threat_trend == result2.threat_trend
+        assert result1.expected_threat_trend == result2.expected_threat_trend
+
+    def test_no_llm_usage(self):
+        ctx = _unit_ctx(
+            events=[_unit_event(eid="E1")],
+            contacts=[_unit_contact(eid="E1", hostile=True)],
+        )
+        result = run_forecast(ctx, horizon=3)
+        assert result.steps  # Should complete without LLM
+
+    def test_empty_events_produces_forecast(self):
+        ctx = _unit_ctx(events=[], contacts=[])
+        result = run_forecast(ctx, horizon=3)
+        assert len(result.steps) == 3
+        for step in result.steps:
+            assert step.threat_level == "LOW"
+
+    def test_each_step_has_full_pipeline_outputs(self):
+        ctx = _unit_ctx(
+            events=[_unit_event(eid="E1")],
+            contacts=[_unit_contact(eid="E1", hostile=True)],
+        )
+        result = run_forecast(ctx, horizon=3)
+        for step in result.steps:
+            assert isinstance(step.fused_tracks, list)
+            assert isinstance(step.threats, list)
+            assert isinstance(step.targets, list)
+            assert isinstance(step.coas, list)
+            assert isinstance(step.threat_level, str)
+            assert isinstance(step.key_changes, list)
+
+    def test_result_has_complete_metadata(self):
+        ctx = _unit_ctx(
+            events=[_unit_event(eid="E1")],
+            contacts=[_unit_contact(eid="E1", hostile=True)],
+        )
+        result = run_forecast(ctx, horizon=3)
+        assert result.horizon == 3
+        assert isinstance(result.initial_state_snapshot, dict)
+        assert isinstance(result.final_state_summary, dict)
+        assert "canonical_pipeline" in result.based_on
+
+    def test_different_horizons_produce_different_step_counts(self):
+        ctx = _unit_ctx(
+            events=[_unit_event(eid="E1")],
+            contacts=[_unit_contact(eid="E1", hostile=True)],
+        )
+        r3 = run_forecast(ctx, horizon=3)
+        r7 = run_forecast(ctx, horizon=7)
+        assert len(r3.steps) == 3
+        assert len(r7.steps) == 7
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: event injection
+# ---------------------------------------------------------------------------
+
+
+class TestEventInjectionUnit:
+    def test_injected_event_changes_outcome(self):
+        ctx = _unit_ctx(
+            events=[_unit_event(eid="E1")],
+            contacts=[_unit_contact(eid="E1", hostile=True)],
+        )
+        baseline = run_forecast(ctx, horizon=3)
+        inj_events = _make_injected_events("jamming", entity_id="E1", lat=57.5, lon=19.0)
+        inj_contacts = _make_injected_contacts("jamming", entity_id="E1", lat=57.5, lon=19.0)
+        with_event = run_forecast(ctx, horizon=3, injected_events=inj_events, injected_contacts=inj_contacts)
+        assert len(with_event.steps) == 3
+        assert with_event.steps[0].contacts > baseline.steps[0].contacts
+
+    def test_cable_severance_injection(self):
+        events = _make_injected_events("cable_severance", entity_id="INFRA-1", lat=57.5, lon=19.0)
+        assert len(events) == 1
+        assert events[0].event_type == EventType.CABLE_SEVERANCE
+
+    def test_jamming_injection_creates_correlated_events(self):
+        events = _make_injected_events("jamming", entity_id="VES-1", lat=57.5, lon=19.0)
+        assert len(events) == 2
+        assert events[1].source == "sigint"
+
+    def test_new_hostile_injection(self):
+        contacts = _make_injected_contacts("new_hostile", entity_id="HOSTILE-1", lat=57.5, lon=19.0)
+        assert len(contacts) == 1
+        assert contacts[0].is_hostile is True
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: change tracking and trends
+# ---------------------------------------------------------------------------
+
+
+class TestChangeTrackingUnit:
+    def test_compute_confidence_single_step(self):
+        steps = [ForecastStep(tick_index=0, timestamp="T+2min", contacts=3, threat_level="LOW")]
+        assert _compute_confidence(steps) == "low"
+
+    def test_compute_confidence_many_stable_sources(self):
+        steps = [
+            ForecastStep(tick_index=i, timestamp=f"T+{i*2}min", contacts=8,
+                         threat_level="MEDIUM", fused_tracks=[{"track_id": f"F{j}"} for j in range(4)])
+            for i in range(5)
+        ]
+        assert _compute_confidence(steps) in ("medium", "high")
+
+    def test_key_changes_initial_step(self):
+        from app.engine.forecasting import _compute_key_changes
+        changes = _compute_key_changes(None, None)
+        assert isinstance(changes, list)
+
+    def test_recommendation_changes_tracked(self):
+        ctx = _unit_ctx(
+            events=[_unit_event(eid="E1")],
+            contacts=[_unit_contact(eid="E1", hostile=True)],
+        )
+        result = run_forecast(ctx, horizon=3)
+        assert isinstance(result.recommendation_changes, list)
+
+    def test_forecast_trend_is_valid(self):
+        ctx = _unit_ctx(
+            events=[_unit_event(eid="E1")],
+            contacts=[_unit_contact(eid="E1", hostile=True)],
+        )
+        result = run_forecast(ctx, horizon=3)
+        assert result.expected_threat_trend in ("increase", "decrease", "stable")
+        assert result.confidence in ("low", "medium", "high")

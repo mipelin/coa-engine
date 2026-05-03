@@ -5,7 +5,9 @@ from fastapi import APIRouter
 from ..core.session import get_session
 from ..core.schemas import AnalysisRequest
 from ..engine.analysis_service import AnalysisContext, run_canonical_analysis
+from ..engine.fusion import serialize_fused_tracks
 from ..engine.state_store import get_state_store
+from ..engine.targeting import serialize_targets
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -69,7 +71,10 @@ async def run_analysis(request: AnalysisRequest):
         "features_computed": len(result.features),
         "features": [f.model_dump(mode="json") for f in result.features],
         "anomalies": [a.model_dump(mode="json") for a in result.anomalies],
+        "fused_tracks": serialize_fused_tracks(result.fused_tracks),
         "threats": [t.model_dump(mode="json") for t in result.threats],
+        "targets": serialize_targets(result.targets),
+        "top_targets": serialize_targets(result.top_targets),
         "tracks": {eid: t.model_dump(mode="json") for eid, t in result.tracks.items()},
         "temporal": result.temporal.model_dump(mode="json") if result.temporal else None,
         "coas": [c.model_dump(mode="json") for c in result.coas],
