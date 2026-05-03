@@ -77,6 +77,8 @@ def test_streamlit_visual_dependency_helper_returns_tuple():
 def test_dashboard_html_contains_llm_indicator_and_event_summary_panel():
     html = build_dashboard_html()
     assert 'id="llm-indicator"' in html
+    assert 'id="llm-health-banner"' in html
+    assert 'id="btn-llm-test"' in html
     assert 'id="event-summary-body"' in html
     assert "LLM working" in html or "LLM idle" in html
     assert 'id="contact-detail-body"' in html
@@ -174,5 +176,38 @@ def test_dashboard_exposes_cop_panels_and_demo_mode():
     assert 'id="replay-panel"' in html
     assert 'id="aar-output"' in html
     assert 'id="demo-mode-run"' in html
+    assert 'id="demo-warm-start"' in html
     assert 'id="toggle-fused-tracks"' in html
     assert 'id="toggle-raw-contacts"' in html
+
+
+def test_dashboard_auto_falls_back_to_raw_contacts_until_fusion_exists():
+    html = build_dashboard_html()
+    assert "state.showRawContacts = true;" in html
+    assert "state.autoRawContactsFallback = true;" in html
+    assert "No fused tracks yet. Raw contacts are shown until fusion initializes." in html
+
+
+def test_dashboard_demo_mode_queues_briefing_without_blocking():
+    html = build_dashboard_html()
+    assert "Briefing queued (non-blocking)" in html
+    assert "void ensureBriefing(" in html
+    assert "await fetchBriefing();" not in html
+
+
+def test_dashboard_operational_effects_are_human_readable():
+    html = build_dashboard_html()
+    assert "function effectSeverityLabel(value)" in html
+    assert "Detection ↓" in html
+    assert "Success ↓" in html
+    assert "Time ↑" in html
+    assert "Risk ↑" in html
+    assert "Slight degradation" in html
+    assert "Severely degraded" in html
+
+
+def test_dashboard_polls_llm_health_and_status():
+    html = build_dashboard_html()
+    assert "await api('/v1/engine/llm/health')" in html
+    assert "window.setInterval(refreshLlmStatus, 1000);" in html
+    assert "window.setInterval(refreshLlmHealth, 3000);" in html

@@ -3,6 +3,14 @@
     <h1 data-i18n="header.title">COA ENGINE</h1>
     <span class="badge b-err" id="badge" data-i18n="header.badge.disconnected">Disconnected</span>
     <div class="llm-indicator idle" id="llm-indicator">LLM idle</div>
+    <div class="llm-health-banner loading" id="llm-health-banner">
+        <div class="llm-health-line">
+            <span class="llm-health-state">LLM status: LOADING</span>
+            <span class="llm-health-meta" id="llm-health-meta">queue 0 · last --</span>
+        </div>
+        <div class="llm-health-sub" id="llm-health-sub">model -- · reachable -- · latency --</div>
+    </div>
+    <button class="llm-test-btn" id="btn-llm-test" type="button">Test LLM</button>
     <div class="thr-badge">
         <span class="thr-lbl" data-i18n="header.threat">Threat</span>
         <span class="thr-val thr-LOW" id="thr-lvl">LOW</span>
@@ -251,6 +259,7 @@
                 <div class="guide-card demo-mode-card" style="margin-bottom:8px;padding:10px">
                     <h3>Demo Scenario Mode</h3>
                     <p>Runs a visible DIANA-style storyline using existing safe simulator and CMS injections: UAV detection, cable severance, vessel correlation, convoy, jamming, recommendation update.</p>
+                    <label class="demo-warm-toggle"><input type="checkbox" id="demo-warm-start" checked> Warm scenario on start (4 ticks)</label>
                     <div class="sim-admin" style="margin:8px 0 0">
                         <button class="sim-undo" id="demo-mode-run">Run Demo Scenario</button>
                         <button class="sim-reset" id="demo-mode-clear">Clear Demo State</button>

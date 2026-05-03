@@ -62,8 +62,10 @@ const state = {
   sourceUiStrings: null,
   briefingLanguage: 'en',
   llmStatus: {busy: false, queue_length: 0, current_task_type: null, last_error: null},
+  llmHealth: {configured: false, reachable: false, queue_length: 0, last_duration_ms: null, model: null},
   latestEventSummary: null,
   demoMode: {running: false, steps: []},
+  autoRawContactsFallback: false,
 };
 
 const UI_TEXT = {
@@ -344,6 +346,11 @@ function fmtPct(value) {
   return `${Math.round(Number(value) * 100)}%`;
 }
 
+function fmtMs(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '--';
+  return `${Math.round(Number(value))} ms`;
+}
+
 function fmtCoord(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '--';
   return Number(value).toFixed(6);
@@ -410,6 +417,19 @@ function sourceLabel(contact) {
 function provenanceLabel(source) {
   const labels = state.cop?.provenance_labels || {};
   return labels[String(source || '').toLowerCase()] || sourceLabel({source});
+}
+
+function effectSeverityLabel(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'Unknown';
+  if (numeric >= 0.9) return 'Normal';
+  if (numeric >= 0.7) return 'Slight degradation';
+  if (numeric >= 0.5) return 'Degraded';
+  return 'Severely degraded';
+}
+
+function hasWarmStartEnabled() {
+  return Boolean(document.getElementById('demo-warm-start')?.checked);
 }
 
 function findSelectedFusedTrack() {
@@ -566,6 +586,17 @@ function setSimStatus(message, kind='ok') {
   box.style.display = 'block';
   box.textContent = state.simStatus.message;
   box.className = `sim-status ${state.simStatus.kind}`;
+}
+
+async function warmScenarioState(ticks = 4) {
+  if (!hasWarmStartEnabled()) return;
+  setSimStatus(`Warm-starting scenario for ${ticks} ticks...`, 'busy');
+  for (let i = 0; i < ticks; i += 1) {
+    await api('/v1/engine/tick', {method: 'POST'});
+  }
+  await refreshSnapshot();
+  setSimStatus(`Warm-start complete: ${ticks} ticks preloaded.`, 'ok');
+  logLine(`Warm-started scenario for ${ticks} ticks`);
 }
 
 function numberOrNull(value) {
@@ -1068,7 +1099,7 @@ function renderContacts() {
     return `
       <div class="ct-item ${selected ? 'contact-selected' : ''}" data-entity="${esc(contact.entity_id)}" data-source="${esc(source)}">
         <div class="ct-name">${esc(attrs.name || contact.entity_id)}</div>
-        <div class="ct-type">${esc(contact.contact_type)} · ${esc(source)}</div>
+        <div class="ct-type">${esc(contact.contact_type)} · ${esc(provenanceLabel(source))}</div>
         <div class="ct-spd">${esc(contact.speed)} kts<br>${esc(fmtLatLon(contact.lat, contact.lon))}</div>
         <div class="ct-warn">${esc(flags.join(' '))}</div>
         <div class="ct-actions">
@@ -1086,7 +1117,7 @@ function renderFusedTrackList() {
   if (!node) return;
   const tracks = activeFusedTracks();
   if (!tracks.length) {
-    node.innerHTML = '<div class="empty">No fused tracks yet.</div>';
+    node.innerHTML = '<div class="empty">No fused tracks yet. Raw contacts are shown until fusion initializes.</div>';
     return;
   }
   node.innerHTML = `<div class="cop-list">${tracks.map((track) => {
@@ -1235,15 +1266,24 @@ function renderOperationalEffectsPanel() {
     return;
   }
   const active = effects.active_effects || [];
+  const metrics = [
+    {label: 'Detection ↓', value: effects.detection_modifier, note: 'Detection reduced'},
+    {label: 'Success ↓', value: effects.coa_success_modifier, note: 'COA success reduced'},
+    {label: 'Time ↑', value: effects.time_modifier, note: 'Time to execute increased'},
+    {label: 'Risk ↑', value: effects.risk_modifier, note: 'Operational risk increased'},
+  ];
   node.innerHTML = `
     <div class="cop-card">
       <div class="cop-card-kicker">Operational effects</div>
       <h3>Weather, sea state, jamming, logistics</h3>
       <div class="metric-grid">
-        <div class="metric-card"><div class="lbl">Detection</div><div class="val">${esc(String(effects.detection_modifier ?? '--'))}</div></div>
-        <div class="metric-card"><div class="lbl">Success</div><div class="val">${esc(String(effects.coa_success_modifier ?? '--'))}</div></div>
-        <div class="metric-card"><div class="lbl">Time</div><div class="val">${esc(String(effects.time_modifier ?? '--'))}</div></div>
-        <div class="metric-card"><div class="lbl">Risk</div><div class="val">${esc(String(effects.risk_modifier ?? '--'))}</div></div>
+        ${metrics.map((metric) => `
+          <div class="metric-card">
+            <div class="lbl">${esc(metric.label)}</div>
+            <div class="val">${esc(String(metric.value ?? '--'))}</div>
+            <div class="cop-item-sub" style="margin-top:4px">${esc(effectSeverityLabel(metric.value))} · ${esc(metric.note)}</div>
+          </div>
+        `).join('')}
       </div>
       <div class="cop-chips">${active.map((item) => `<span class="cop-chip">${esc(item)}</span>`).join('')}</div>
     </div>
@@ -1671,6 +1711,32 @@ function renderLlmIndicator() {
   el.textContent = `${t('llm.idle', 'LLM idle')} · ${queueText}`;
 }
 
+function renderLlmHealthBanner() {
+  const banner = document.getElementById('llm-health-banner');
+  const meta = document.getElementById('llm-health-meta');
+  const sub = document.getElementById('llm-health-sub');
+  if (!banner || !meta || !sub) return;
+  const status = state.llmStatus || {};
+  const health = state.llmHealth || {};
+  const lastDuration = health.last_duration_ms ?? status.last_duration_ms ?? null;
+  let bannerClass = 'loading';
+  let stateText = 'LLM status: LOADING';
+  if (status.last_error || health.last_error) {
+    bannerClass = 'error';
+    stateText = 'LLM status: LOADING FAILED';
+  } else if (status.busy) {
+    bannerClass = 'busy';
+    stateText = 'LLM status: BUSY';
+  } else if (health.reachable) {
+    bannerClass = 'ready';
+    stateText = 'LLM status: READY';
+  }
+  banner.className = `llm-health-banner ${bannerClass}`;
+  banner.querySelector('.llm-health-state').textContent = stateText;
+  meta.textContent = `queue ${status.queue_length || 0} · last ${fmtMs(lastDuration)}`;
+  sub.textContent = `model ${health.model || '--'} · reachable ${health.reachable ? 'yes' : 'no'} · latency ${fmtMs(lastDuration)}`;
+}
+
 function renderEventSummary() {
   const el = document.getElementById('event-summary-body');
   if (!el) return;
@@ -1733,7 +1799,15 @@ async function refreshLlmStatus() {
     if (status?.last_summary) state.latestEventSummary = status.last_summary;
   } catch (_) {}
   renderLlmIndicator();
+  renderLlmHealthBanner();
   renderEventSummary();
+}
+
+async function refreshLlmHealth() {
+  try {
+    state.llmHealth = await api('/v1/engine/llm/health');
+  } catch (_) {}
+  renderLlmHealthBanner();
 }
 
 function initQueryHandlers() {
@@ -2085,6 +2159,7 @@ async function applyUiLanguage(language, {refreshBriefing = false} = {}) {
   renderBriefing();
   renderEventSummary();
   renderLlmIndicator();
+  renderLlmHealthBanner();
   renderReplayPanel();
   renderAar();
   renderDemoMode();
@@ -2111,11 +2186,14 @@ async function startEngine() {
   updateCableRoutes();
   connectSocket();
   await refreshSnapshot();
+  await refreshLlmHealth();
+  await refreshLlmStatus();
   state.running = true;
   document.getElementById('btn-go').style.display = 'none';
   document.getElementById('btn-stop').style.display = 'inline-block';
   logLine(`Engine started on ${scenarioId}`);
   logLine('Guide: watch the map first, then open COAs once the threat level starts changing');
+  await warmScenarioState(4);
   fetchTimelineData();
 }
 
@@ -2277,6 +2355,14 @@ async function refreshSnapshot() {
     tick: snapshot.tick,
   } : state.latestEventSummary;
   state.tick = snapshot.tick || snapshot.state?.tick || 0;
+  const hasFusedTracks = state.fusedTracks.length > 0;
+  if (!hasFusedTracks && !state.showRawContacts) {
+    state.showRawContacts = true;
+    state.autoRawContactsFallback = true;
+  } else if (hasFusedTracks && state.autoRawContactsFallback) {
+    state.showRawContacts = false;
+    state.autoRawContactsFallback = false;
+  }
   const snapshotScenario = snapshot.state?.scenario?.scenario_id || snapshot.scenario_id;
   if (snapshotScenario) {
     state.scenario = snapshotScenario;
@@ -2305,6 +2391,7 @@ async function refreshSnapshot() {
   renderAar();
   renderDemoMode();
   renderLlmIndicator();
+  renderLlmHealthBanner();
   renderEventSummary();
   syncVisibilityControls();
   syncCombatControls();
@@ -2489,7 +2576,7 @@ async function runDemoScenarioMode() {
     {label: 'Suspicious vessel correlation', status: 'pending'},
     {label: 'Convoy sighting', status: 'pending'},
     {label: 'Jamming detected', status: 'pending'},
-    {label: 'Briefing and recommendation refresh', status: 'pending'},
+    {label: 'Briefing queued (non-blocking)', status: 'pending'},
   ];
   state.demoMode = {running: true, steps};
   renderDemoMode();
@@ -2533,7 +2620,13 @@ async function runDemoScenarioMode() {
 
     markStep(5, 'run');
     await refreshSnapshot();
-    await fetchBriefing();
+    logLine('Briefing queued (non-blocking)');
+    void ensureBriefing(
+      document.getElementById('briefing-lang')?.value || state.briefingLanguage || state.uiLanguage,
+      {render: true, log: true}
+    )
+      .catch((error) => logLine(`${t('briefing.error', 'Briefing error')}: ${error.message}`))
+      .finally(() => refreshLlmHealth());
     markStep(5, 'done');
   } finally {
     state.demoMode.running = false;
@@ -2848,6 +2941,7 @@ function bindStaticEvents() {
   });
   document.getElementById('toggle-raw-contacts').addEventListener('change', (evt) => {
     state.showRawContacts = evt.target.checked;
+    state.autoRawContactsFallback = false;
     updateMap();
     renderContacts();
     renderContactDetails();
@@ -2934,6 +3028,11 @@ function bindStaticEvents() {
   document.getElementById('btn-generate-aar')?.addEventListener('click', loadAar);
   document.getElementById('demo-mode-run')?.addEventListener('click', runDemoScenarioMode);
   document.getElementById('demo-mode-clear')?.addEventListener('click', clearDemoMode);
+  document.getElementById('btn-llm-test')?.addEventListener('click', async () => {
+    await refreshLlmHealth();
+    await refreshLlmStatus();
+    logLine(`LLM health: reachable=${state.llmHealth?.reachable ? 'yes' : 'no'} model=${state.llmHealth?.model || '--'} latency=${fmtMs(state.llmHealth?.last_duration_ms)}`);
+  });
   document.getElementById('co-list').addEventListener('click', (evt) => {
     const card = evt.target.closest('.coa-card');
     if (!card) return;
@@ -3049,13 +3148,16 @@ window.addEventListener('load', async () => {
   renderBriefing();
   renderEventSummary();
   renderLlmIndicator();
+  renderLlmHealthBanner();
   renderReplayPanel();
   renderAar();
   renderDemoMode();
   initQueryHandlers();
   await refreshSnapshot();
+  await refreshLlmHealth();
   await refreshLlmStatus();
   window.setInterval(refreshLlmStatus, 1000);
+  window.setInterval(refreshLlmHealth, 3000);
   logLine(t('log.dashboard_ready', 'Dashboard ready. Select a scenario and click Start.'));
   logLine(t('log.tip_quick_actions', 'Tip: use the big quick actions in Simulator if you want immediate threat/COA changes.'));
   logLine(t('log.tip_playbooks', 'Use mission playbooks for realistic test cases: maritime threat, UAV near airport, EW escalation, or allied support.'));

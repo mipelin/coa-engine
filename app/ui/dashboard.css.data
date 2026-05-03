@@ -10,6 +10,17 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0e17;color:#d1d5d
 .llm-indicator.queued{background:#3f2f08;color:#facc15;border-color:#854d0e}
 .llm-indicator.idle{background:#111827;color:#cbd5e1}
 .llm-indicator.error{background:#450a0a;color:#fca5a5;border-color:#991b1b}
+.llm-health-banner{display:flex;flex-direction:column;gap:2px;min-width:220px;padding:5px 10px;border-radius:10px;border:1px solid #334155;background:#0f172a}
+.llm-health-banner.ready{border-color:#166534;background:#052e16}
+.llm-health-banner.loading{border-color:#1d4ed8;background:#0f172a}
+.llm-health-banner.busy{border-color:#854d0e;background:#3f2f08}
+.llm-health-banner.error{border-color:#991b1b;background:#450a0a}
+.llm-health-line{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.llm-health-state{font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#f8fafc}
+.llm-health-meta,.llm-health-sub{font-size:9px;color:#cbd5e1;white-space:nowrap}
+.llm-health-sub{color:#94a3b8}
+.llm-test-btn{background:#1e293b;color:#dbeafe;border:1px solid #334155;padding:4px 10px;border-radius:999px;cursor:pointer;font-size:10px;font-weight:700}
+.llm-test-btn:hover{border-color:#60a5fa;background:#24344d}
 .hdr .m{font-size:11px;color:#64748b}
 .thr-badge{display:flex;align-items:center;gap:8px;padding:3px 12px;border-radius:6px;background:#1e293b;border:1px solid #334155}
 .thr-lbl{font-size:9px;color:#64748b;text-transform:uppercase}
@@ -177,6 +188,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0e17;color:#d1d5d
 .demo-step.done{border-color:#166534;color:#86efac}
 .demo-step.run{border-color:#1d4ed8;color:#93c5fd}
 .demo-step.pending{color:#94a3b8}
+.demo-warm-toggle{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:10px;color:#cbd5e1}
 .sim-form,.su-edit,.su-action{display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px}
 .sim-form label,.su-edit label,.su-action label{color:#64748b;font-size:9px;display:block}
 .sim-presets{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}
