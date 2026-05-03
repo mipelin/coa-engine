@@ -12,6 +12,8 @@ from .explanation import generate_briefing
 from .llm_narrative import build_compact_briefing_context, enrich_threat_narrative
 from .llm_orchestrator import get_llm_orchestrator
 from .analysis_service import AnalysisContext, run_canonical_analysis
+from .targeting import serialize_targets
+from .replay import capture_snapshot, get_replay_store
 from .state_store import get_state_store
 
 logger = logging.getLogger("coa_engine.engine.event_loop")
@@ -55,6 +57,7 @@ class EventLoop:
         self._last_reason_summary = "No major change yet."
         self._last_analysis_trigger = None
         self._last_event_summary_event_id = None
+        get_replay_store().clear()
 
     def _on_contact(self, event: Event) -> None:
         """Reactive handler — trigger analysis on significant contacts."""
@@ -214,6 +217,40 @@ class EventLoop:
             targets=targets,
             fused_tracks=fused_tracks,
         )
+
+        # Persist COA optimization result
+        if analysis.coa_optimization is not None:
+            self._store._coa_optimization = analysis.coa_optimization
+
+        # Persist operational effects
+        if analysis.operational_effects is not None:
+            self._store._operational_effects = analysis.operational_effects
+
+        # Capture replay snapshot
+        key_changes: list[str] = []
+        if threat_changed:
+            key_changes.append(f"Threat level changed to {threats[0].threat_level.value if threats else 'LOW'}")
+        if coa_changed:
+            key_changes.append(f"Recommendation changed to {rec.recommended.coa.title if rec and rec.recommended else 'none'}")
+        if roe_changed:
+            new_roe = rec.recommended.coa.roe_status if rec and rec.recommended else None
+            key_changes.append(f"ROE status changed to {new_roe}")
+
+        snapshot = capture_snapshot(
+            tick,
+            threats=threats,
+            scored=scored,
+            recommendation=rec,
+            coa_optimization=analysis.coa_optimization,
+            fused_tracks=fused_tracks,
+            targets=targets,
+            contacts=self._store.get_contacts(),
+            operational_effects=analysis.operational_effects,
+            scenario_id=self._store.state.scenario.scenario_id,
+            key_changes=key_changes if key_changes else None,
+            trigger=trigger,
+        )
+        get_replay_store().add_snapshot(snapshot)
 
         # Publish change events
         if threat_changed:
@@ -484,6 +521,19 @@ class EventLoop:
                 active_incidents=self._store.state.scenario.active_incidents,
                 key_risks=briefing.risks,
                 forecast_summary=rec.edge_cases or None,
+                fused_tracks=[track.to_dict() for track in analysis.fused_tracks[:5]],
+                top_targets=serialize_targets(analysis.top_targets),
+                operational_effects=analysis.operational_effects.to_dict() if analysis.operational_effects else {},
+                optimization_summary={
+                    "best_variant": (
+                        analysis.coa_optimization.best_variant.model_dump(mode="json")
+                        if analysis.coa_optimization and analysis.coa_optimization.best_variant else None
+                    ),
+                    "optimized_variants": (
+                        [item.model_dump(mode="json") for item in analysis.coa_optimization.optimized_variants[:3]]
+                        if analysis.coa_optimization else []
+                    ),
+                },
             )
 
             logger.info(

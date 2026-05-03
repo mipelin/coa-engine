@@ -70,6 +70,10 @@ def build_compact_briefing_context(
     active_incidents: list[str] | None = None,
     key_risks: list[str] | None = None,
     forecast_summary: str | None = None,
+    fused_tracks: list[dict] | None = None,
+    top_targets: list[dict] | None = None,
+    operational_effects: dict | None = None,
+    optimization_summary: dict | None = None,
 ) -> str:
     """Build a compact structured context string for briefing LLM call."""
     lines = [
@@ -102,6 +106,30 @@ def build_compact_briefing_context(
             if roe != "allowed" and c.get("roe_reason"):
                 line += f" — {c['roe_reason']}"
             lines.append(line)
+
+    if fused_tracks:
+        lines.append("\n--- FUSED TRACKS ---")
+        for track in fused_tracks[:5]:
+            lines.append(
+                f"  {track.get('track_id', '?')}: {track.get('track_type', '?')} / "
+                f"{track.get('primary_entity_id', '?')}, confidence {track.get('fused_confidence', 0):.0%}, "
+                f"sources {track.get('source_count', 0)} ({', '.join(track.get('sources', [])[:4])})"
+            )
+            if track.get("rationale"):
+                lines.append(f"      Rationale: {track['rationale']}")
+
+    if top_targets:
+        lines.append("\n--- TOP TARGETS ---")
+        for target in top_targets[:5]:
+            lines.append(
+                f"  {target.get('id', target.get('entity_id', '?'))}: "
+                f"{target.get('priority_level', '?')} priority, "
+                f"threat {target.get('threat_score', 0):.2f}, "
+                f"action {target.get('recommended_action', '?')}, "
+                f"ROE {target.get('roe_status', '?')}"
+            )
+            if target.get("rationale"):
+                lines.append(f"      Rationale: {target['rationale']}")
     if recommended_coa:
         lines.append(
             "\n--- RECOMMENDED COA ---\n"
@@ -136,6 +164,36 @@ def build_compact_briefing_context(
         lines.append("\n--- KEY RISKS ---")
         for risk in key_risks[:5]:
             lines.append(f"  {risk}")
+
+    if operational_effects:
+        lines.append("\n--- OPERATIONAL EFFECTS ---")
+        active = operational_effects.get("active_effects", [])
+        if active:
+            lines.append(f"  Active effects: {', '.join(active[:6])}")
+        lines.append(
+            f"  Detection {operational_effects.get('detection_modifier', 1.0):.2f}, "
+            f"COA success {operational_effects.get('coa_success_modifier', 1.0):.2f}, "
+            f"Time {operational_effects.get('time_modifier', 1.0):.2f}, "
+            f"Risk {operational_effects.get('risk_modifier', 1.0):.2f}"
+        )
+
+    if optimization_summary:
+        lines.append("\n--- OPTIMIZED VARIANTS ---")
+        best = optimization_summary.get("best_variant")
+        if best:
+            lines.append(
+                f"  Best variant: {best.get('coa', {}).get('title', best.get('coa_id', '?'))} "
+                f"(score {best.get('total_score', 0):.1f})"
+            )
+        for variant in optimization_summary.get("optimized_variants", [])[:3]:
+            lines.append(
+                f"  {variant.get('coa', {}).get('title', '?')}: "
+                f"score {variant.get('total_score', 0):.1f}, "
+                f"success {variant.get('simulation', {}).get('success_probability', 0):.0%}, "
+                f"escalation {variant.get('simulation', {}).get('escalation_probability', 0):.0%}"
+            )
+            if variant.get("tradeoff_explanation"):
+                lines.append(f"      Why: {variant['tradeoff_explanation']}")
 
     if forecast_summary:
         lines.append(f"\n--- FORECAST SUMMARY ---\n  {forecast_summary}")

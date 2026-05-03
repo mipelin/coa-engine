@@ -6,14 +6,24 @@ const state = {
   mapLayer: null,
   cableLayers: [],
   markers: new Map(),
+  fusedMarkers: new Map(),
   aisMarkers: new Map(),
   flashTimer: null,
   scenario: 'baltic_hybrid_001',
   tick: 0,
+  cop: null,
   contacts: [],
+  fusedTracks: [],
+  targets: [],
+  topTargets: [],
   tracks: {},
   coas: [],
   recommendation: null,
+  decisionPanel: null,
+  forecastSummary: null,
+  operationalEffects: {},
+  replaySummary: {},
+  aar: null,
   assets: [],
   aisContacts: [],
   briefing: null,
@@ -38,6 +48,8 @@ const state = {
   scheduledActions: {},
   injectedStack: [],
   showCableRoutes: true,
+  showFusedTracks: true,
+  showRawContacts: false,
   show_ais: false,
   show_combat_contacts: true,
   show_sim_entities: true,
@@ -51,6 +63,7 @@ const state = {
   briefingLanguage: 'en',
   llmStatus: {busy: false, queue_length: 0, current_task_type: null, last_error: null},
   latestEventSummary: null,
+  demoMode: {running: false, steps: []},
 };
 
 const UI_TEXT = {
@@ -389,13 +402,44 @@ function sourceLabel(contact) {
   const source = contactSource(contact);
   if (source === 'ais') return 'AIS';
   if (source === 'combat_system') return 'Combat System';
+  if (source === 'fused') return 'Heuristic Fusion';
   if (source === 'simulation') return 'Simulation';
   return source;
+}
+
+function provenanceLabel(source) {
+  const labels = state.cop?.provenance_labels || {};
+  return labels[String(source || '').toLowerCase()] || sourceLabel({source});
+}
+
+function findSelectedFusedTrack() {
+  if (!state.selectedEntityId || state.selectedContactSource !== 'fused') return null;
+  return (state.fusedTracks || []).find((track) =>
+    track.primary_entity_id === state.selectedEntityId ||
+    track.track_id === state.selectedEntityId ||
+    (track.correlated_entities || []).includes(state.selectedEntityId)
+  ) || null;
+}
+
+function findSelectedTarget() {
+  if (!state.selectedEntityId) return null;
+  return (state.targets || []).find((target) => target.entity_id === state.selectedEntityId) ||
+    (state.topTargets || []).find((target) => target.entity_id === state.selectedEntityId) ||
+    null;
 }
 
 function findSelectedContact() {
   if (!state.selectedEntityId) return null;
   const source = state.selectedContactSource || 'simulation';
+  if (source === 'fused') {
+    const selectedTrack = findSelectedFusedTrack();
+    if (selectedTrack) {
+      return (state.contacts || []).find((contact) =>
+        contact.entity_id === selectedTrack.primary_entity_id ||
+        (selectedTrack.correlated_entities || []).includes(contact.entity_id)
+      ) || null;
+    }
+  }
   if (source === 'ais') {
     return (state.aisContacts || []).find((contact) => contact.entity_id === state.selectedEntityId) ||
       (state.contacts || []).find((contact) => contact.entity_id === state.selectedEntityId && contactSource(contact) === 'ais') ||
@@ -404,6 +448,47 @@ function findSelectedContact() {
   return (state.contacts || []).find((contact) => contact.entity_id === state.selectedEntityId && contactSource(contact) === source) ||
     (state.contacts || []).find((contact) => contact.entity_id === state.selectedEntityId) ||
     null;
+}
+
+function fusedTrackToRenderable(track) {
+  const primarySource = (track.sources || [])[0] || 'fused';
+  const trackType = track.track_type || 'unknown';
+  const unitClass = {
+    vessel: 'vessel',
+    submarine: 'submarine',
+    aircraft: 'aircraft',
+    uav: 'uav',
+    ground: 'ground_unit',
+    unknown: 'unknown',
+  }[trackType] || 'unknown';
+  return {
+    entity_id: track.primary_entity_id,
+    contact_id: track.track_id,
+    source: 'fused',
+    contact_type: trackType,
+    lat: Number(track.position?.lat || 0),
+    lon: Number(track.position?.lon || 0),
+    speed: Number(track.speed || 0),
+    heading: Number(track.heading || 0),
+    confidence: Number(track.fused_confidence || 0),
+    is_hostile: ['hostile', 'red', 'suspicious'].includes(String(track.allegiance || '').toLowerCase()),
+    attributes: {
+      name: track.track_id,
+      subtype: track.track_type || 'unknown',
+      unit_class: unitClass,
+      allegiance: track.allegiance || 'unknown',
+      domain: trackType === 'submarine' ? 'subsurface' : (trackType === 'aircraft' || trackType === 'uav' ? 'air' : 'surface'),
+      track_quality: track.source_count >= 3 ? 'high' : (track.source_count === 2 ? 'medium' : 'low'),
+      source_system: primarySource,
+      fused_track: true,
+      fused_confidence: track.fused_confidence,
+      source_count: track.source_count,
+      sources: track.sources || [],
+      rationale: track.rationale || '',
+      behavior_flags: [],
+      provenance_label: 'Heuristic fusion',
+    },
+  };
 }
 
 const MAP_STYLES = {
@@ -611,6 +696,16 @@ function activeContacts() {
   });
 }
 
+function activeFusedTracks() {
+  return (state.fusedTracks || []).filter((track) => {
+    const decorated = fusedTrackToRenderable(track);
+    const allegiance = normalizedAllegiance(decorated);
+    const hostileKey = allegiance === 'neutral' ? 'neutral' : (allegiance === 'hostile' ? 'hostile' : 'friendly');
+    const domainKey = contactDomain(decorated);
+    return state.filters[hostileKey] && state.filters[domainKey];
+  });
+}
+
 function mapEntityTypeToContactType(type) {
   const mapping = {
     vessel: 'vessel',
@@ -738,45 +833,59 @@ function renderContactDetails() {
   const node = document.getElementById('contact-detail-body');
   const status = document.getElementById('contact-detail-status');
   if (!node) return;
+  const selectedTrack = findSelectedFusedTrack();
+  const selectedTarget = findSelectedTarget();
   const contact = findSelectedContact();
-  if (!contact) {
+  if (!contact && !selectedTrack) {
     if (status) status.textContent = t('contact.none_selected', 'No contact selected');
     node.innerHTML = `<div class="empty">${esc(t('contact.none_selected', 'No contact selected'))}</div>`;
     return;
   }
-  const attrs = contact.attributes || {};
-  const anomaly = (state.anomalies || []).find((item) => item.entity_id === contact.entity_id);
-  const threat = (state.threats || []).find((item) => item.entity_id === contact.entity_id);
+  const attrs = contact?.attributes || {};
+  const anomaly = contact ? (state.anomalies || []).find((item) => item.entity_id === contact.entity_id) : null;
+  const threat = contact ? (state.threats || []).find((item) => item.entity_id === contact.entity_id) : null;
   const behaviorFlags = attrs.behavior_flags || attrs.flags || [];
-  const updateTs = contact.timestamp ? new Date(contact.timestamp).toISOString() : '—';
-  const altitudeValue = contact.attributes?.altitude_ft != null ? `${contact.attributes.altitude_ft} ft` : '—';
-  const depthValue = contact.attributes?.depth_m != null ? `${contact.attributes.depth_m} m` : '—';
-  if (status) status.textContent = `${sourceLabel(contact)} · ${contact.entity_id}`;
+  const updateTs = contact?.timestamp ? new Date(contact.timestamp).toISOString() : '—';
+  const altitudeValue = contact?.attributes?.altitude_ft != null ? `${contact.attributes.altitude_ft} ft` : '—';
+  const depthValue = contact?.attributes?.depth_m != null ? `${contact.attributes.depth_m} m` : '—';
+  if (status) status.textContent = selectedTrack ? `Heuristic fusion · ${selectedTrack.track_id}` : `${sourceLabel(contact)} · ${contact.entity_id}`;
   node.innerHTML = `
-    <div class="cd-title">${esc(attrs.name || contact.entity_id)}</div>
+    <div class="cd-title">${esc(selectedTrack ? selectedTrack.track_id : (attrs.name || contact.entity_id))}</div>
     <div class="cd-grid">
-      <div><span class="cd-lbl">${esc(t('map.type', 'Type'))}</span><span class="cd-val">${esc(contact.contact_type)}</span></div>
-      <div><span class="cd-lbl">${esc(t('map.classification', 'Classification'))}</span><span class="cd-val">${esc(contact.attributes?.subtype || normalizeUnitClass(contact))}</span></div>
-      <div><span class="cd-lbl">${esc(t('map.source', 'Source'))}</span><span class="cd-val">${esc(contactSource(contact))}</span></div>
-      <div><span class="cd-lbl">${esc(t('map.confidence', 'Confidence'))}</span><span class="cd-val">${esc(fmtPct(contact.confidence))}</span></div>
-      <div><span class="cd-lbl">${esc(t('map.track_quality', 'Track Quality'))}</span><span class="cd-val">${esc(contact.attributes?.track_quality || '—')}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.type', 'Type'))}</span><span class="cd-val">${esc(selectedTrack?.track_type || contact.contact_type)}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.classification', 'Classification'))}</span><span class="cd-val">${esc(selectedTarget?.type || contact?.attributes?.subtype || normalizeUnitClass(contact || fusedTrackToRenderable(selectedTrack)))}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.source', 'Source'))}</span><span class="cd-val">${esc(selectedTrack ? 'Heuristic fusion' : provenanceLabel(contactSource(contact)))}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.confidence', 'Confidence'))}</span><span class="cd-val">${esc(fmtPct(selectedTrack?.fused_confidence ?? contact?.confidence))}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.track_quality', 'Track Quality'))}</span><span class="cd-val">${esc(contact?.attributes?.track_quality || (selectedTrack ? (selectedTrack.source_count >= 3 ? 'high' : (selectedTrack.source_count === 2 ? 'medium' : 'low')) : '—'))}</span></div>
       <div><span class="cd-lbl">${esc(t('map.last_update', 'Last Update'))}</span><span class="cd-val">${esc(updateTs)}</span></div>
-      <div><span class="cd-lbl">${esc(t('map.latitude', 'Latitude'))}</span><span class="cd-val">${esc(fmtCoord(contact.lat))}</span></div>
-      <div><span class="cd-lbl">${esc(t('map.longitude', 'Longitude'))}</span><span class="cd-val">${esc(fmtCoord(contact.lon))}</span></div>
-      <div><span class="cd-lbl">${esc(t('map.speed', 'Speed'))}</span><span class="cd-val">${esc(contact.speed)} kts</span></div>
-      <div><span class="cd-lbl">${esc(t('map.heading', 'Heading'))}</span><span class="cd-val">${esc(contact.heading)}°</span></div>
+      <div><span class="cd-lbl">${esc(t('map.latitude', 'Latitude'))}</span><span class="cd-val">${esc(fmtCoord(selectedTrack?.position?.lat ?? contact?.lat))}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.longitude', 'Longitude'))}</span><span class="cd-val">${esc(fmtCoord(selectedTrack?.position?.lon ?? contact?.lon))}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.speed', 'Speed'))}</span><span class="cd-val">${esc(selectedTrack?.speed ?? contact?.speed)} kts</span></div>
+      <div><span class="cd-lbl">${esc(t('map.heading', 'Heading'))}</span><span class="cd-val">${esc(selectedTrack?.heading ?? contact?.heading)}°</span></div>
       <div><span class="cd-lbl">${esc(t('map.altitude', 'Altitude'))}</span><span class="cd-val">${esc(altitudeValue)}</span></div>
       <div><span class="cd-lbl">${esc(t('map.depth', 'Depth'))}</span><span class="cd-val">${esc(depthValue)}</span></div>
-      <div><span class="cd-lbl">${esc(t('map.anomaly_score', 'Anomaly'))}</span><span class="cd-val">${esc(anomaly ? `${anomaly.anomaly_score}` : '—')}</span></div>
-      <div><span class="cd-lbl">${esc(t('map.threat_score', 'Threat'))}</span><span class="cd-val">${esc(threat ? fmtPct(threat.threat_probability) : '—')}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.anomaly_score', 'Anomaly'))}</span><span class="cd-val">${esc(selectedTrack ? String(Math.round((selectedTrack.anomaly_support || 0) * 100)) : (anomaly ? `${anomaly.anomaly_score}` : '—'))}</span></div>
+      <div><span class="cd-lbl">${esc(t('map.threat_score', 'Threat'))}</span><span class="cd-val">${esc(selectedTarget ? selectedTarget.threat_score : (threat ? fmtPct(threat.threat_probability) : '—'))}</span></div>
     </div>
+    ${selectedTarget ? `
+    <div class="cd-section">
+      <div class="cd-lbl">Targeting advisory</div>
+      <div class="cd-list">Priority ${esc(selectedTarget.priority_level)} · action ${esc(selectedTarget.recommended_action)} · ROE ${esc(selectedTarget.roe_status)}</div>
+      <div class="cd-list">${esc(selectedTarget.rationale || 'No rationale available.')}</div>
+    </div>` : ''}
+    ${selectedTrack ? `
+    <div class="cd-section">
+      <div class="cd-lbl">Fusion</div>
+      <div class="cd-list">confidence=${esc(fmtPct(selectedTrack.fused_confidence))} · source_count=${esc(String(selectedTrack.source_count || 0))}</div>
+      <div class="cd-list">${esc((selectedTrack.sources || []).map((src) => provenanceLabel(src)).join(', ') || '—')}</div>
+    </div>` : ''}
     <div class="cd-section">
       <div class="cd-lbl">${esc(t('map.flags', 'Flags'))}</div>
       <div class="cd-list">${esc(contactDetailValue(behaviorFlags))}</div>
     </div>
     <div class="cd-section">
       <div class="cd-lbl">ID</div>
-      <div class="cd-list">${esc(contact.entity_id)}</div>
+      <div class="cd-list">${esc(selectedTrack ? selectedTrack.track_id : contact.entity_id)}</div>
     </div>
   `;
 }
@@ -787,7 +896,7 @@ function popupHtml(contact) {
     `<b>${esc(attrs.name || contact.entity_id)}</b>`,
     `${esc(t('map.type', 'Type'))}: ${esc(contact.contact_type)}`,
     `${esc(t('map.classification', 'Classification'))}: ${esc(normalizeUnitClass(contact))}`,
-    `${esc(t('map.source', 'Source'))}: ${esc(contactSource(contact))}`,
+    `${esc(t('map.source', 'Source'))}: ${esc(provenanceLabel(contact.source || contactSource(contact)))}`,
     `${esc(t('map.confidence', 'Confidence'))}: ${esc(fmtPct(contact.confidence))}`,
     `${esc(t('map.latitude', 'Latitude'))}: ${esc(fmtCoord(contact.lat))}`,
     `${esc(t('map.longitude', 'Longitude'))}: ${esc(fmtCoord(contact.lon))}`,
@@ -795,6 +904,11 @@ function popupHtml(contact) {
     `${esc(t('map.heading', 'Heading'))}: ${esc(contact.heading)}`,
     `${esc(t('map.last_update', 'Last Update'))}: ${esc(contact.timestamp ? new Date(contact.timestamp).toISOString() : '—')}`,
   ];
+  if (attrs.fused_track) {
+    lines.push(`Fused confidence: ${esc(fmtPct(attrs.fused_confidence))}`);
+    lines.push(`Source count: ${esc(String(attrs.source_count || 0))}`);
+    lines.push(`Sources: ${esc((attrs.sources || []).map((src) => provenanceLabel(src)).join(', '))}`);
+  }
   if (contact.attributes?.altitude_ft != null) lines.push(`${esc(t('map.altitude', 'Altitude'))}: ${esc(contact.attributes.altitude_ft)} ft`);
   if (contact.attributes?.depth_m != null) lines.push(`${esc(t('map.depth', 'Depth'))}: ${esc(contact.attributes.depth_m)} m`);
   if (contact.attributes?.track_quality) lines.push(`${esc(t('map.track_quality', 'Track Quality'))}: ${esc(contact.attributes.track_quality)}`);
@@ -828,20 +942,48 @@ function aisPopupHtml(contact) {
 }
 
 function updateMap() {
-  const visibleIds = new Set();
-  activeContacts().forEach((contact) => {
-    visibleIds.add(contact.entity_id);
-    let marker = state.markers.get(contact.entity_id);
-    if (!marker) {
-      marker = L.marker([contact.lat, contact.lon], {icon: markerIcon(contact)}).addTo(state.map);
-      state.markers.set(contact.entity_id, marker);
-    } else {
-      marker.setLatLng([contact.lat, contact.lon]);
-      marker.setIcon(markerIcon(contact));
+  const visibleTrackIds = new Set();
+  if (state.showFusedTracks) {
+    activeFusedTracks().forEach((track) => {
+      const trackId = track.track_id;
+      visibleTrackIds.add(trackId);
+      const rendered = fusedTrackToRenderable(track);
+      rendered.attributes.name = track.track_id;
+      let marker = state.fusedMarkers.get(trackId);
+      if (!marker) {
+        marker = L.marker([rendered.lat, rendered.lon], {icon: markerIcon(rendered)}).addTo(state.map);
+        state.fusedMarkers.set(trackId, marker);
+      } else {
+        marker.setLatLng([rendered.lat, rendered.lon]);
+        marker.setIcon(markerIcon(rendered));
+      }
+      marker.bindPopup(popupHtml(rendered));
+      marker.off('click').on('click', () => setSelectedEntity(track.primary_entity_id, 'fused'));
+    });
+  }
+  for (const [trackId, marker] of state.fusedMarkers.entries()) {
+    if (!visibleTrackIds.has(trackId)) {
+      state.map.removeLayer(marker);
+      state.fusedMarkers.delete(trackId);
     }
-    marker.bindPopup(popupHtml(contact));
-    marker.off('click').on('click', () => setSelectedEntity(contact.entity_id, contactSource(contact)));
-  });
+  }
+
+  const visibleIds = new Set();
+  if (state.showRawContacts) {
+    activeContacts().forEach((contact) => {
+      visibleIds.add(contact.entity_id);
+      let marker = state.markers.get(contact.entity_id);
+      if (!marker) {
+        marker = L.marker([contact.lat, contact.lon], {icon: markerIcon(contact)}).addTo(state.map);
+        state.markers.set(contact.entity_id, marker);
+      } else {
+        marker.setLatLng([contact.lat, contact.lon]);
+        marker.setIcon(markerIcon(contact));
+      }
+      marker.bindPopup(popupHtml(contact));
+      marker.off('click').on('click', () => setSelectedEntity(contact.entity_id, contactSource(contact)));
+    });
+  }
   for (const [entityId, marker] of state.markers.entries()) {
     if (!visibleIds.has(entityId)) {
       state.map.removeLayer(marker);
@@ -893,21 +1035,25 @@ function upsertContacts(incoming) {
 
 function renderContacts() {
   const contacts = activeContacts();
+  const fusedTracks = activeFusedTracks();
   const tabCount = document.getElementById('tab-ct');
   const statContacts = document.getElementById('s-ct');
   const statTracks = document.getElementById('s-tk');
   const statCoas = document.getElementById('s-co');
   const statProcessed = document.getElementById('s-pr');
-  if (tabCount) tabCount.textContent = contacts.length;
+  if (tabCount) tabCount.textContent = fusedTracks.length || contacts.length;
   if (statContacts) statContacts.textContent = contacts.length;
-  if (statTracks) statTracks.textContent = Object.keys(state.tracks || {}).length;
+  if (statTracks) statTracks.textContent = fusedTracks.length || Object.keys(state.tracks || {}).length;
   if (statCoas) statCoas.textContent = state.coas.length;
   const processed = state.lastState?.contacts_processed ?? 0;
   if (statProcessed) statProcessed.textContent = processed;
+  renderFusedTrackList();
+  renderTargetPanel();
   const list = document.getElementById('ct-list');
   if (!list) return;
   if (!contacts.length) {
     list.innerHTML = `<div class="empty">${esc(t('contacts.empty', 'No contacts'))}</div>`;
+    renderContactDetails();
     return;
   }
   list.innerHTML = contacts.map((contact) => {
@@ -933,6 +1079,66 @@ function renderContacts() {
     `;
   }).join('');
   renderContactDetails();
+}
+
+function renderFusedTrackList() {
+  const node = document.getElementById('fused-track-list');
+  if (!node) return;
+  const tracks = activeFusedTracks();
+  if (!tracks.length) {
+    node.innerHTML = '<div class="empty">No fused tracks yet.</div>';
+    return;
+  }
+  node.innerHTML = `<div class="cop-list">${tracks.map((track) => {
+    const target = (state.targets || []).find((item) => item.entity_id === track.primary_entity_id);
+    const selected = state.selectedContactSource === 'fused' && state.selectedEntityId === track.primary_entity_id;
+    return `
+      <div class="cop-item ${selected ? 'contact-selected' : ''}" data-track="${esc(track.track_id)}">
+        <div class="cop-item-title">
+          <span>${esc(track.track_id)}</span>
+          <span class="cop-chip ${(target?.priority_level || 'low').toLowerCase()}">${esc(target?.priority_level || 'TRACK')}</span>
+        </div>
+        <div class="cop-item-sub">${esc(track.track_type)} · ${esc(track.allegiance)} · ${esc(fmtLatLon(track.position?.lat, track.position?.lon))}</div>
+        <div class="cop-chips">
+          <span class="cop-chip">confidence ${esc(fmtPct(track.fused_confidence))}</span>
+          <span class="cop-chip">sources ${esc(String(track.source_count || 0))}</span>
+          <span class="cop-chip">${esc((track.sources || []).map((src) => provenanceLabel(src)).join(' / '))}</span>
+        </div>
+        <div class="cop-item-sub">${esc(track.rationale || 'No fusion rationale available.')}</div>
+        <div class="ct-actions" style="margin-top:6px">
+          <button data-action="select-fused-track" data-entity="${esc(track.primary_entity_id)}">Inspect</button>
+        </div>
+      </div>
+    `;
+  }).join('')}</div>`;
+}
+
+function renderTargetPanel() {
+  const node = document.getElementById('target-panel');
+  if (!node) return;
+  const target = findSelectedTarget() || (state.topTargets || [])[0];
+  if (!target) {
+    node.innerHTML = '<div class="empty">No target advisory available yet.</div>';
+    return;
+  }
+  node.innerHTML = `
+    <div class="cop-item">
+      <div class="cop-item-title">
+        <span>${esc(target.entity_id)}</span>
+        <span class="cop-chip ${(target.priority_level || 'low').toLowerCase()}">${esc(target.priority_level)}</span>
+      </div>
+      <div class="metric-grid" style="margin-top:8px">
+        <div class="metric-card"><div class="lbl">Classification</div><div class="val">${esc(target.type)}</div></div>
+        <div class="metric-card"><div class="lbl">Threat</div><div class="val">${esc(String(target.threat_score))}</div></div>
+        <div class="metric-card"><div class="lbl">Action</div><div class="val">${esc(target.recommended_action)}</div></div>
+        <div class="metric-card"><div class="lbl">ROE</div><div class="val">${esc(target.roe_status)}</div></div>
+      </div>
+      <div class="cop-chips">
+        ${(target.sources || []).map((src) => `<span class="cop-chip">${esc(provenanceLabel(src))}</span>`).join('')}
+      </div>
+      <div class="cop-item-sub">${esc(target.rationale || 'No rationale available.')}</div>
+    </div>
+  `;
 }
 
 
@@ -972,6 +1178,133 @@ function coaColor(score) {
   if (score >= 80) return '#22c55e';
   if (score >= 60) return '#eab308';
   return '#f97316';
+}
+
+function renderDecisionPanel() {
+  const node = document.getElementById('decision-panel');
+  if (!node) return;
+  const panel = state.decisionPanel || {};
+  const rec = panel.current_recommendation;
+  const variants = panel.optimized_variants || [];
+  const forecast = state.forecastSummary || {};
+  if (!rec && !variants.length) {
+    node.innerHTML = '<div class="empty">Awaiting decision panel</div>';
+    return;
+  }
+  node.innerHTML = `
+    <div class="cop-card">
+      <div class="cop-card-kicker">Deterministic recommendation</div>
+      <h3>${esc(rec?.title || 'Recommendation pending')}</h3>
+      <div class="metric-grid">
+        <div class="metric-card"><div class="lbl">Score</div><div class="val">${esc(rec ? rec.score : '--')}</div></div>
+        <div class="metric-card"><div class="lbl">Success</div><div class="val">${esc(rec ? fmtPct(rec.success_probability) : '--')}</div></div>
+        <div class="metric-card"><div class="lbl">ROE</div><div class="val">${esc(rec?.roe_status || '--')}</div></div>
+        <div class="metric-card"><div class="lbl">Forecast</div><div class="val">${esc(forecast.available ? forecast.trend_direction : 'pending')}</div></div>
+      </div>
+      <div class="delta-list">
+        <div class="cop-item"><div class="cop-card-kicker">Why this wins</div><p>${esc(rec?.rationale || 'No current recommendation rationale available.')}</p></div>
+        ${variants.length ? variants.map((variant) => `
+          <div class="cop-item">
+            <div class="cop-item-title">
+              <span>${esc(variant.title)}</span>
+              <span class="cop-chip ${esc((variant.roe_status || 'allowed').toLowerCase())}">${esc(variant.roe_status || 'allowed')}</span>
+            </div>
+            <div class="metric-grid" style="margin-top:8px">
+              <div class="metric-card"><div class="lbl">Robustness</div><div class="val">${esc(String(variant.robustness))}</div></div>
+              <div class="metric-card"><div class="lbl">Success</div><div class="val">${esc(fmtPct(variant.success_probability))}</div></div>
+              <div class="metric-card"><div class="lbl">Escalation</div><div class="val">${esc(fmtPct(variant.escalation_probability))}</div></div>
+              <div class="metric-card"><div class="lbl">Score</div><div class="val">${esc(String(variant.total_score))}</div></div>
+            </div>
+            <div class="cop-item-sub">${esc(variant.tradeoff_explanation || 'No tradeoff explanation provided.')}</div>
+            <div class="cop-chips">
+              ${variant.parameters ? Object.entries(variant.parameters).filter(([key]) => !['variant_id', 'base_template_id', 'variant_label'].includes(key)).map(([key, value]) => `<span class="cop-chip">${esc(key)}=${esc(String(value))}</span>`).join('') : ''}
+            </div>
+          </div>
+        `).join('') : '<div class="cop-item"><div class="cop-item-sub">No optimized variants available yet.</div></div>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderOperationalEffectsPanel() {
+  const node = document.getElementById('effects-panel');
+  if (!node) return;
+  const effects = state.operationalEffects || {};
+  if (!Object.keys(effects).length) {
+    node.innerHTML = '<div class="empty">No operational effects yet.</div>';
+    return;
+  }
+  const active = effects.active_effects || [];
+  node.innerHTML = `
+    <div class="cop-card">
+      <div class="cop-card-kicker">Operational effects</div>
+      <h3>Weather, sea state, jamming, logistics</h3>
+      <div class="metric-grid">
+        <div class="metric-card"><div class="lbl">Detection</div><div class="val">${esc(String(effects.detection_modifier ?? '--'))}</div></div>
+        <div class="metric-card"><div class="lbl">Success</div><div class="val">${esc(String(effects.coa_success_modifier ?? '--'))}</div></div>
+        <div class="metric-card"><div class="lbl">Time</div><div class="val">${esc(String(effects.time_modifier ?? '--'))}</div></div>
+        <div class="metric-card"><div class="lbl">Risk</div><div class="val">${esc(String(effects.risk_modifier ?? '--'))}</div></div>
+      </div>
+      <div class="cop-chips">${active.map((item) => `<span class="cop-chip">${esc(item)}</span>`).join('')}</div>
+    </div>
+  `;
+}
+
+function renderReplayPanel() {
+  const node = document.getElementById('replay-panel');
+  if (!node) return;
+  const replay = state.replaySummary || {};
+  if (!replay.snapshots_count) {
+    node.innerHTML = '<div class="empty">No replay data available yet.</div>';
+    return;
+  }
+  node.innerHTML = `
+    <div class="cop-item">
+      <div class="metric-grid">
+        <div class="metric-card"><div class="lbl">Snapshots</div><div class="val">${esc(String(replay.snapshots_count || 0))}</div></div>
+        <div class="metric-card"><div class="lbl">First Tick</div><div class="val">${esc(String(replay.first_tick || '--'))}</div></div>
+        <div class="metric-card"><div class="lbl">Last Tick</div><div class="val">${esc(String(replay.last_tick || '--'))}</div></div>
+        <div class="metric-card"><div class="lbl">Latest Lesson</div><div class="val">${esc(replay.latest_lesson || '—')}</div></div>
+      </div>
+      <div class="cop-item-sub">Last major change: ${esc(replay.last_major_change || '—')}</div>
+    </div>
+  `;
+}
+
+function renderAar() {
+  const node = document.getElementById('aar-output');
+  if (!node) return;
+  const aar = state.aar;
+  if (!aar) {
+    node.innerHTML = '<div class="empty">Generate AAR after a scenario run.</div>';
+    return;
+  }
+  node.innerHTML = `
+    <div class="cop-item">
+      <div class="cop-card-kicker">What happened</div>
+      <p>${esc(aar.situation_summary || '—')}</p>
+      <div class="cop-card-kicker" style="margin-top:8px">What changed</div>
+      <ul>${(aar.threat_evolution || []).slice(-3).map((item) => `<li>${esc(`${item.tick}: ${item.threat_level}`)}</li>`).join('')}</ul>
+      <div class="cop-card-kicker" style="margin-top:8px">What was recommended</div>
+      <ul>${(aar.recommendation_timeline || []).slice(-3).map((item) => `<li>${esc(`${item.tick}: ${item.title || item.coa_id || 'N/A'}`)}</li>`).join('')}</ul>
+    </div>
+  `;
+}
+
+function renderDemoMode() {
+  const statusNode = document.getElementById('demo-mode-status');
+  const stepsNode = document.getElementById('demo-mode-steps');
+  if (!statusNode || !stepsNode) return;
+  const steps = state.demoMode.steps || [];
+  if (!steps.length) {
+    statusNode.style.display = 'none';
+    stepsNode.innerHTML = '';
+    return;
+  }
+  statusNode.style.display = 'block';
+  statusNode.className = `sim-status ${state.demoMode.running ? 'busy' : 'ok'}`;
+  statusNode.textContent = state.demoMode.running ? 'Demo scenario mode running.' : 'Demo scenario mode complete.';
+  stepsNode.innerHTML = steps.map((step) => `<div class="demo-step ${esc(step.status)}">${esc(step.label)}</div>`).join('');
 }
 
 function signedPctDelta(value) {
@@ -1363,6 +1696,8 @@ function renderEventSummary() {
 
 function syncVisibilityControls() {
   const mapping = [
+    ['toggle-fused-tracks', state.showFusedTracks],
+    ['toggle-raw-contacts', state.showRawContacts],
     ['toggle-live-ais', state.show_ais],
     ['toggle-combat-contacts', state.show_combat_contacts],
     ['toggle-sim-entities', state.show_sim_entities],
@@ -1420,6 +1755,8 @@ function initQueryHandlers() {
 }
 
 function renderCoas() {
+  renderDecisionPanel();
+  renderOperationalEffectsPanel();
   const tabCount = document.getElementById('tab-co');
   if (tabCount) tabCount.textContent = state.coas.length;
   const container = document.getElementById('co-list');
@@ -1622,6 +1959,7 @@ function renderSimulator() {
   const container = document.getElementById('sim-units');
   if (!contacts.length) {
     container.innerHTML = `<div class="empty">${esc(t('sim.no_units', 'No units available'))}</div>`;
+    renderDemoMode();
     return;
   }
   container.innerHTML = contacts.map((contact) => {
@@ -1677,6 +2015,7 @@ function renderSimulator() {
       </div>
     `;
   }).join('');
+  renderDemoMode();
 }
 
 function simulatorBusy() {
@@ -1746,6 +2085,9 @@ async function applyUiLanguage(language, {refreshBriefing = false} = {}) {
   renderBriefing();
   renderEventSummary();
   renderLlmIndicator();
+  renderReplayPanel();
+  renderAar();
+  renderDemoMode();
   syncVisibilityControls();
   syncCombatControls();
   updateMap();
@@ -1812,7 +2154,7 @@ function flashThreat(level) {
   state.flashTimer = setTimeout(() => flash.style.boxShadow = 'none', 450);
 }
 
-function applyTick(payload) {
+async function applyTick(payload) {
   const prevThreatLevel = state.lastState?.current_threat_level || null;
   const prevThreatEntity = state.lastState?.top_threat_entity || null;
   const prevRecommended = state.recommendation?.recommended?.coa?.coa_id || null;
@@ -1863,14 +2205,8 @@ function applyTick(payload) {
     setWhyChanged(reasons.join(' | '));
   }
   if (payload.analysis?.threat_changed || payload.analysis?.coa_changed) flashThreat(threatLevel);
-  updateMap();
-  renderContacts();
-  renderContactDetails();
-  renderCoas();
+  await refreshSnapshot();
   if (!simulatorBusy()) renderSimulator();
-  renderEventSummary();
-  syncVisibilityControls();
-  syncCombatControls();
   fetchTimelineData();
 }
 
@@ -1919,19 +2255,29 @@ async function downloadBriefingPDF(language) {
 }
 
 async function refreshSnapshot() {
-  const snapshot = await api('/v1/engine/analysis');
+  const snapshot = await api('/v1/engine/cop');
+  state.cop = snapshot;
   state.contacts = snapshot.contacts || [];
-  state.tracks = snapshot.tracks || {};
+  state.fusedTracks = snapshot.fused_tracks || [];
+  state.targets = snapshot.targets || [];
+  state.topTargets = snapshot.top_targets || [];
+  state.decisionPanel = snapshot.decision_panel || null;
+  state.forecastSummary = snapshot.forecast_summary || null;
+  state.operationalEffects = snapshot.operational_effects || {};
+  state.replaySummary = snapshot.replay_summary || {};
   state.coas = snapshot.scored_coas || [];
   state.recommendation = snapshot.recommendation || null;
   state.assets = snapshot.assets || [];
   state.anomalies = snapshot.anomalies || [];
   state.threats = snapshot.threats || [];
   state.lastState = snapshot.state || {};
-  state.llmStatus = snapshot.llm_status || state.llmStatus;
-  state.latestEventSummary = snapshot.latest_event_summary || state.latestEventSummary;
-  state.tick = snapshot.state?.tick || 0;
-  const snapshotScenario = snapshot.state?.scenario?.scenario_id;
+  state.latestEventSummary = snapshot.event_narrative?.summary_text ? {
+    ...snapshot.event_narrative,
+    summary_text: snapshot.event_narrative.summary_text,
+    tick: snapshot.tick,
+  } : state.latestEventSummary;
+  state.tick = snapshot.tick || snapshot.state?.tick || 0;
+  const snapshotScenario = snapshot.state?.scenario?.scenario_id || snapshot.scenario_id;
   if (snapshotScenario) {
     state.scenario = snapshotScenario;
     const selector = document.getElementById('scn-sel');
@@ -1940,7 +2286,7 @@ async function refreshSnapshot() {
   }
   const tickNode = document.getElementById('tick-d');
   if (tickNode) tickNode.textContent = `${t('tick.label', 'Tick')}: ${state.tick || '--'}`;
-  const threatLevel = snapshot.state?.current_threat_level || 'LOW';
+  const threatLevel = snapshot.threat_summary?.threat_level || snapshot.state?.current_threat_level || 'LOW';
   const threatNode = document.getElementById('thr-lvl');
   if (threatNode) {
     threatNode.textContent = threatLevel;
@@ -1948,13 +2294,16 @@ async function refreshSnapshot() {
   }
   const threatProb = document.getElementById('thr-prb');
   const threatEntity = document.getElementById('thr-ent');
-  if (threatProb) threatProb.textContent = fmtPct(snapshot.state?.top_threat_probability);
-  if (threatEntity) threatEntity.textContent = snapshot.state?.top_threat_entity || '';
+  if (threatProb) threatProb.textContent = fmtPct(snapshot.threat_summary?.top_threat_probability ?? snapshot.state?.top_threat_probability);
+  if (threatEntity) threatEntity.textContent = snapshot.threat_summary?.top_threat_entity || snapshot.state?.top_threat_entity || '';
   updateMap();
   renderContacts();
   renderContactDetails();
   renderCoas();
   if (!simulatorBusy()) renderSimulator();
+  renderReplayPanel();
+  renderAar();
+  renderDemoMode();
   renderLlmIndicator();
   renderEventSummary();
   syncVisibilityControls();
@@ -2116,6 +2465,82 @@ async function injectPlaybookNow(playKey) {
   await injectUnit();
 }
 
+async function loadAar() {
+  try {
+    const result = await api('/v1/engine/replay/aar');
+    state.aar = result.aar || null;
+    renderAar();
+    logLine(result.status === 'ok' ? 'After-action review generated' : (result.message || 'No replay data available'));
+  } catch (error) {
+    logLine(`AAR error: ${error.message}`);
+  }
+}
+
+function clearDemoMode() {
+  state.demoMode = {running: false, steps: []};
+  renderDemoMode();
+}
+
+async function runDemoScenarioMode() {
+  if (state.demoMode.running) return;
+  const steps = [
+    {label: 'UAV detection', status: 'pending'},
+    {label: 'Cable severance', status: 'pending'},
+    {label: 'Suspicious vessel correlation', status: 'pending'},
+    {label: 'Convoy sighting', status: 'pending'},
+    {label: 'Jamming detected', status: 'pending'},
+    {label: 'Briefing and recommendation refresh', status: 'pending'},
+  ];
+  state.demoMode = {running: true, steps};
+  renderDemoMode();
+  const center = state.map ? state.map.getCenter() : {lat: 57.5, lng: 19.5};
+  const markStep = (index, status) => {
+    state.demoMode.steps[index].status = status;
+    renderDemoMode();
+  };
+  try {
+    markStep(0, 'run');
+    await injectPresetNow('hostile_uav');
+    markStep(0, 'done');
+
+    markStep(1, 'run');
+    await injectPresetNow('cable_event');
+    markStep(1, 'done');
+
+    markStep(2, 'run');
+    await injectCombatFeedContact('vessel', true);
+    markStep(2, 'done');
+
+    markStep(3, 'run');
+    state.simDraft = {
+      ...state.simDraft,
+      name: 'Civilian Convoy',
+      type: 'convoy',
+      ally: 'neutral',
+      speed: '12',
+      heading: '75',
+      lat: (center.lat - 0.06).toFixed(4),
+      lon: (center.lng + 0.09).toFixed(4),
+      radius_nm: '20',
+      ais_off: 'false',
+    };
+    await injectUnit();
+    markStep(3, 'done');
+
+    markStep(4, 'run');
+    await injectPresetNow('jamming_event');
+    markStep(4, 'done');
+
+    markStep(5, 'run');
+    await refreshSnapshot();
+    await fetchBriefing();
+    markStep(5, 'done');
+  } finally {
+    state.demoMode.running = false;
+    renderDemoMode();
+  }
+}
+
 async function injectUnit(latlng = null) {
   if (latlng) {
     state.simDraft.lat = Number(latlng.lat).toFixed(6);
@@ -2244,13 +2669,23 @@ async function resetScenarioFromDashboard() {
       await api('/v1/engine/stop', {method: 'POST'});
     }
     await api('/v1/engine/reset', {method: 'POST'});
+    state.cop = null;
     state.contacts = [];
+    state.fusedTracks = [];
+    state.targets = [];
+    state.topTargets = [];
     state.tracks = {};
     state.coas = [];
     state.recommendation = null;
+    state.decisionPanel = null;
+    state.forecastSummary = null;
+    state.operationalEffects = {};
+    state.replaySummary = {};
+    state.aar = null;
     state.anomalies = [];
     state.threats = [];
     clearBriefings();
+    clearDemoMode();
     state.injectedStack = [];
     state.simulatorNotes = {};
     state.scheduledActions = {};
@@ -2405,6 +2840,18 @@ function bindStaticEvents() {
     updateCableRoutes();
     logLine(`${state.showCableRoutes ? 'Showing' : 'Hiding'} cable routes for ${state.scenario}`);
   });
+  document.getElementById('toggle-fused-tracks').addEventListener('change', (evt) => {
+    state.showFusedTracks = evt.target.checked;
+    updateMap();
+    renderContacts();
+    renderContactDetails();
+  });
+  document.getElementById('toggle-raw-contacts').addEventListener('change', (evt) => {
+    state.showRawContacts = evt.target.checked;
+    updateMap();
+    renderContacts();
+    renderContactDetails();
+  });
   document.getElementById('toggle-live-ais').addEventListener('change', async (evt) => {
     state.show_ais = evt.target.checked;
     state.showAis = state.show_ais;
@@ -2484,6 +2931,9 @@ function bindStaticEvents() {
       await injectPlaybookNow(button.dataset.play);
     });
   });
+  document.getElementById('btn-generate-aar')?.addEventListener('click', loadAar);
+  document.getElementById('demo-mode-run')?.addEventListener('click', runDemoScenarioMode);
+  document.getElementById('demo-mode-clear')?.addEventListener('click', clearDemoMode);
   document.getElementById('co-list').addEventListener('click', (evt) => {
     const card = evt.target.closest('.coa-card');
     if (!card) return;
@@ -2577,6 +3027,12 @@ function bindStaticEvents() {
     const row = evt.target.closest('.ct-item[data-entity]');
     if (row) setSelectedEntity(row.dataset.entity, row.dataset.source || contactSource((state.contacts || []).find((item) => item.entity_id === row.dataset.entity)));
   });
+  document.getElementById('fused-track-list')?.addEventListener('click', (evt) => {
+    const button = evt.target.closest('button[data-action="select-fused-track"]');
+    if (button) {
+      setSelectedEntity(button.dataset.entity, 'fused');
+    }
+  });
 }
 
 window.addEventListener('load', async () => {
@@ -2593,6 +3049,9 @@ window.addEventListener('load', async () => {
   renderBriefing();
   renderEventSummary();
   renderLlmIndicator();
+  renderReplayPanel();
+  renderAar();
+  renderDemoMode();
   initQueryHandlers();
   await refreshSnapshot();
   await refreshLlmStatus();

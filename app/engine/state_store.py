@@ -505,6 +505,11 @@ class StateStore:
             self._prev_recommended_coa_id = None
             self._prev_recommended_roe_status = None
             self._latest_event_summary = None
+            # Clear Phase 5-7 artifacts
+            if hasattr(self, "_coa_optimization"):
+                self._coa_optimization = None
+            if hasattr(self, "_operational_effects"):
+                self._operational_effects = None
         self._on_state_changed()
 
 

@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +20,45 @@ from .core.schemas import HealthResponse
 setup_logging()
 startup_logger = logging.getLogger("coa_engine.startup")
 
-app = FastAPI(title=settings.app_name, version=settings.app_version)
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    # --- Startup ---
+    startup_logger.info(
+        "LLM config: enabled=%s base_url=%s model=%s timeout=%.0fs max_tokens=%d api_key_present=%s",
+        settings.llm_enabled,
+        settings.llm_base_url,
+        settings.llm_model,
+        settings.llm_timeout_seconds,
+        settings.llm_max_tokens,
+        "yes" if settings.llm_api_key else "no",
+    )
+
+    from .core.session import get_session
+    from .engine.event_ingestion import load_sample_scenario
+
+    if settings.persistence_enabled:
+        from .engine.persistence import get_persistent_store
+        store = get_persistent_store()
+        if not store.restore():
+            session = get_session()
+            session.load_scenario(load_sample_scenario())
+    else:
+        session = get_session()
+        session.load_scenario(load_sample_scenario())
+
+    yield
+
+    # --- Shutdown ---
+    if settings.persistence_enabled:
+        from .engine.persistence import get_persistent_store
+        try:
+            get_persistent_store().close()
+        except Exception:
+            pass
+
+
+app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,33 +93,6 @@ async def rate_limit_middleware(request: Request, call_next):
     except HTTPException:
         return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
     return await call_next(request)
-
-
-@app.on_event("startup")
-async def startup():
-    # LLM startup diagnostics
-    startup_logger.info(
-        "LLM config: enabled=%s base_url=%s model=%s timeout=%.0fs max_tokens=%d api_key_present=%s",
-        settings.llm_enabled,
-        settings.llm_base_url,
-        settings.llm_model,
-        settings.llm_timeout_seconds,
-        settings.llm_max_tokens,
-        "yes" if settings.llm_api_key else "no",
-    )
-
-    from .core.session import get_session
-    from .engine.event_ingestion import load_sample_scenario
-
-    if settings.persistence_enabled:
-        from .engine.persistence import get_persistent_store
-        store = get_persistent_store()
-        if not store.restore():
-            session = get_session()
-            session.load_scenario(load_sample_scenario())
-    else:
-        session = get_session()
-        session.load_scenario(load_sample_scenario())
 
 
 @app.get("/health", response_model=HealthResponse)

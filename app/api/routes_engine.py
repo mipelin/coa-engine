@@ -34,8 +34,24 @@ from ..engine.state_store import StateStore, get_state_store
 from ..engine.llm_client import get_llm_client
 from ..engine.llm_orchestrator import get_llm_orchestrator
 from ..engine.targeting import serialize_targets
+from ..engine.coa_optimizer import OptimizationResult
+from ..engine.cop import assemble_cop, cop_to_dict
+from ..engine.operational_effects import OperationalEffects, compute_operational_effects
+from ..engine.replay import generate_aar, get_replay_store
 
 router = APIRouter(prefix="/engine", tags=["engine"])
+
+
+def _serialize_optimization(opt: OptimizationResult | None) -> dict | None:
+    if opt is None:
+        return None
+    return {
+        "optimized_variants": [s.model_dump(mode="json") for s in opt.optimized_variants],
+        "variant_parameters": opt.variant_parameters,
+        "best_variant": opt.best_variant.model_dump(mode="json") if opt.best_variant else None,
+        "robustness_ranking": opt.robustness_ranking,
+        "optimization_summary": opt.optimization_summary,
+    }
 
 
 @router.get("/llm/health")
@@ -205,12 +221,128 @@ async def full_analysis():
         "recommendation": rec.model_dump(mode="json") if rec else None,
         "tracks": {k: v.model_dump(mode="json") for k, v in tracks.items()},
         "assets": [asset.model_dump(mode="json") for asset in assets],
+        "coa_optimization": _serialize_optimization(getattr(store, "_coa_optimization", None)),
+        "operational_effects": (
+            getattr(store, "_operational_effects", None).to_dict()
+            if getattr(store, "_operational_effects", None) else {}
+        ),
         "llm_status": await llm_status(),
         "latest_event_summary": (
             store.get_latest_event_summary().model_dump(mode="json")
             if store.get_latest_event_summary() else None
         ),
     }
+
+
+@router.get("/cop")
+async def common_operating_picture():
+    """Unified Common Operating Picture — commander-facing COP view.
+
+    Returns structured snapshot of:
+    - fused tracks with visual attributes
+    - targets with classification and ROE
+    - threat summary
+    - decision panel (recommendation + top optimized variants)
+    - forecast summary
+    - event narrative
+    - key anomalies
+    - operational effects
+
+    No analysis recomputation. Reads current engine state only.
+    """
+    cop = assemble_cop()
+    return cop_to_dict(cop)
+
+
+@router.get("/operational-effects")
+async def get_operational_effects():
+    """Return current operational effects from engine state.
+
+    Includes environment, jamming, logistics conditions and their
+    computed impact on analysis outputs.
+    """
+    store = get_state_store()
+    effects = getattr(store, "_operational_effects", None)
+    if effects is not None:
+        return effects.to_dict()
+    # Compute from current environment if no cached effects
+    env = store.state.scenario.environment
+    effects = compute_operational_effects(env)
+    return effects.to_dict()
+
+
+@router.post("/operational-effects")
+async def set_operational_conditions(payload: dict):
+    """Set operational conditions and compute their effects.
+
+    Accepts: sea_state, visibility, weather, time_of_day, ice_cover,
+    jamming_intensity, readiness, distance, fuel_endurance.
+    """
+    store = get_state_store()
+    env = dict(store.state.scenario.environment)
+
+    field_map = {
+        "sea_state": ("sea_state", int),
+        "visibility": ("visibility", str),
+        "weather": ("weather", str),
+        "time_of_day": ("time_of_day", str),
+        "ice_cover": ("ice_cover", str),
+        "jamming_intensity": ("jamming_intensity", str),
+        "readiness": ("readiness", str),
+        "distance": ("distance", str),
+        "fuel_endurance": ("fuel_endurance", float),
+    }
+    for key, (env_key, type_fn) in field_map.items():
+        if key in payload:
+            env[env_key] = type_fn(payload[key])
+
+    store.set_scenario_state(environment=env)
+    effects = compute_operational_effects(env)
+    store._operational_effects = effects
+    return effects.to_dict()
+
+
+# ---- Replay / AAR ----
+
+
+@router.get("/replay/timeline")
+async def replay_timeline():
+    """Return the full replay timeline of compact snapshots."""
+    store = get_replay_store()
+    return store.get_timeline().to_dict()
+
+
+@router.get("/replay/snapshot/{tick}")
+async def replay_snapshot(tick: int):
+    """Return a single replay snapshot at the given tick."""
+    store = get_replay_store()
+    snapshot = store.get_snapshot(tick)
+    if snapshot is None:
+        return {"status": "not_found", "tick": tick}
+    return {"status": "ok", "snapshot": snapshot.to_dict()}
+
+
+@router.get("/replay/aar")
+async def after_action_review():
+    """Generate a deterministic after-action review from the replay timeline."""
+    store = get_replay_store()
+    timeline = store.get_timeline()
+    if not timeline.snapshots:
+        return {
+            "status": "no_data",
+            "message": "No replay data available. Run a scenario first.",
+            "aar": None,
+        }
+    aar = generate_aar(timeline)
+    return {"status": "ok", "aar": aar.to_dict()}
+
+
+@router.post("/replay/clear")
+async def clear_replay():
+    """Clear all replay snapshots."""
+    store = get_replay_store()
+    store.clear()
+    return {"status": "ok", "message": "Replay data cleared."}
 
 
 @router.post("/combat_contacts/toggle")
@@ -602,6 +734,9 @@ async def run_forecast_endpoint(payload: dict):
     else:
         result = forecast_baseline(horizon_ticks=horizon)
 
+    store = get_state_store()
+    store._coa_forecast = result
+
     response: dict = {
         "summary": result.summary,
         "expected_threat_trend": result.expected_threat_trend,
@@ -687,6 +822,49 @@ async def run_pipeline_forecast(payload: dict):
         "expected_outcome": result.expected_outcome,
         "based_on": result.based_on,
     }
+
+
+# ---- COA Optimization ----
+
+
+@router.get("/coa/optimization")
+async def get_coa_optimization():
+    """Return the latest COA optimization result from the engine state."""
+    store = get_state_store()
+    opt = getattr(store, "_coa_optimization", None)
+    return _serialize_optimization(opt) or {"status": "no_optimization_available"}
+
+
+@router.post("/coa/optimization")
+async def run_coa_optimization(payload: dict | None = None):
+    """Run COA optimization on demand using current engine state."""
+    from ..engine.analysis_service import AnalysisContext
+
+    store = get_state_store()
+    contacts = store.get_contacts()
+    if not contacts:
+        return {"status": "error", "message": "No active contacts for optimization."}
+
+    events = store.contacts_as_events()
+    context = AnalysisContext(
+        events=events,
+        infrastructure=store.get_infrastructure() or None,
+        scenario_state=store.state.scenario,
+        asset_inventory=store.get_asset_inventory() or None,
+        asset_states=store.get_asset_states() or None,
+        active_contacts=contacts,
+        source="coa_optimization_api",
+        tick=store.get_tick(),
+        scenario_id=store.state.scenario.scenario_id,
+        scenario_name=store.state.scenario.scenario_name,
+    )
+    result = run_canonical_analysis(context)
+    opt = result.coa_optimization
+
+    # Persist to store for GET endpoint
+    store._coa_optimization = opt
+
+    return _serialize_optimization(opt) or {"status": "no_variants"}
 
 
 # ---- Natural Language Query ----

@@ -126,6 +126,9 @@ class Settings(BaseSettings):
     persistence_db_path: str = "data/coa_engine_state.db"
     persistence_debounce_seconds: float = 2.0
 
+    # Replay / AAR
+    replay_max_snapshots: int = 500
+
     model_config = {"env_prefix": "COA_"}
 
 

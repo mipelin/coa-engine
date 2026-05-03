@@ -104,6 +104,9 @@ def test_briefing_uses_single_llm_call_in_selected_language(client):
     assert briefing["language_used"] == "es"
     assert len(fake.calls) == 1
     assert "Spanish" in fake.calls[0][0]
+    assert "FUSED TRACKS" in fake.calls[0][1]
+    assert "TOP TARGETS" in fake.calls[0][1]
+    assert "OPERATIONAL EFFECTS" in fake.calls[0][1]
 
 
 def test_query_question_language_overrides_ui_hint(client):

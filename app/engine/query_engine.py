@@ -171,8 +171,12 @@ class QueryContext:
     contacts: list[dict[str, Any]] = field(default_factory=list)
     threats: list[dict[str, Any]] = field(default_factory=list)
     anomalies: list[dict[str, Any]] = field(default_factory=list)
+    fused_tracks: list[dict[str, Any]] = field(default_factory=list)
+    top_targets: list[dict[str, Any]] = field(default_factory=list)
     scored_coas: list[dict[str, Any]] = field(default_factory=list)
     recommendation: dict[str, Any] | None = None
+    optimization: dict[str, Any] = field(default_factory=dict)
+    operational_effects: dict[str, Any] = field(default_factory=dict)
     fired_stimuli: list[dict[str, Any]] = field(default_factory=list)
     active_stimuli: list[dict[str, Any]] = field(default_factory=list)
     active_incidents: list[str] = field(default_factory=list)
@@ -220,6 +224,10 @@ def build_context() -> QueryContext:
     scored = store.get_scored_coas()
     rec = store.get_recommendation()
     anomalies = getattr(store, "_anomalies", [])
+    fused_tracks = getattr(store, "_fused_tracks", [])
+    top_targets = getattr(store, "_targets", [])[:5]
+    optimization = getattr(store, "_coa_optimization", None)
+    operational_effects = getattr(store, "_operational_effects", None)
 
     fired_stimuli: list[dict[str, Any]] = []
     active_stimuli: list[dict[str, Any]] = []
@@ -286,6 +294,33 @@ def build_context() -> QueryContext:
             for a in anomalies
             if a.anomaly_score >= 30
         ],
+        fused_tracks=[
+            {
+                "track_id": ft.track_id,
+                "primary_entity_id": ft.primary_entity_id,
+                "track_type": ft.track_type,
+                "allegiance": ft.allegiance,
+                "confidence": round(ft.fused_confidence, 3),
+                "source_count": ft.source_count,
+                "sources": ft.sources,
+                "rationale": ft.rationale,
+            }
+            for ft in fused_tracks[:8]
+        ],
+        top_targets=[
+            {
+                "entity_id": target.id,
+                "type": target.type,
+                "priority_level": target.priority_level,
+                "priority_score": target.priority_score,
+                "threat_score": target.threat_score,
+                "recommended_action": target.recommended_action,
+                "roe_status": target.roe_status,
+                "sources": target.sources,
+                "rationale": target.rationale,
+            }
+            for target in top_targets
+        ],
         scored_coas=scored_coas_data,
         recommendation=(
             {
@@ -298,6 +333,24 @@ def build_context() -> QueryContext:
             }
             if rec and rec.recommended else None
         ),
+        optimization=(
+            {
+                "best_variant_id": optimization.best_variant.coa.coa_id if optimization and optimization.best_variant else None,
+                "variant_count": len(optimization.optimized_variants) if optimization else 0,
+                "top_variants": [
+                    {
+                        "title": item.coa.title,
+                        "score": round(item.total_score, 1),
+                        "success_probability": round(item.simulation.success_probability, 3),
+                        "escalation_probability": round(item.simulation.escalation_probability, 3),
+                        "tradeoff_explanation": item.tradeoff_explanation,
+                    }
+                    for item in (optimization.optimized_variants[:3] if optimization else [])
+                ],
+            }
+            if optimization else {}
+        ),
+        operational_effects=operational_effects.to_dict() if operational_effects else {},
         fired_stimuli=fired_stimuli[-10:],
         active_stimuli=active_stimuli,
         active_incidents=scenario.active_incidents,
@@ -336,6 +389,28 @@ def context_to_text(ctx: QueryContext) -> str:
             lines.append(f"  {a['entity_id']}: score={a['score']}, level={a['level']}, "
                          f"indicators: {'; '.join(a['indicators'])}")
 
+    if ctx.fused_tracks:
+        lines.append(f"\n--- FUSED TRACKS ---")
+        for ft in ctx.fused_tracks[:5]:
+            lines.append(
+                f"  {ft['track_id']} ({ft['track_type']} / {ft['primary_entity_id']}): "
+                f"confidence {ft['confidence']:.0%}, sources={ft['source_count']} "
+                f"({', '.join(ft['sources'])})"
+            )
+            if ft.get("rationale"):
+                lines.append(f"      Rationale: {ft['rationale']}")
+
+    if ctx.top_targets:
+        lines.append(f"\n--- TOP TARGETS ---")
+        for target in ctx.top_targets[:5]:
+            lines.append(
+                f"  {target['entity_id']}: {target['priority_level']} priority, "
+                f"threat {target['threat_score']:.2f}, action {target['recommended_action']}, "
+                f"ROE {target['roe_status']}"
+            )
+            if target.get("rationale"):
+                lines.append(f"      Rationale: {target['rationale']}")
+
     if ctx.scored_coas:
         lines.append(f"\n--- COAs ({len(ctx.scored_coas)}) ---")
         for s in ctx.scored_coas:
@@ -352,6 +427,33 @@ def context_to_text(ctx: QueryContext) -> str:
         lines.append(f"  Rationale: {r['rationale']}")
         if r["roe_reason"]:
             lines.append(f"  ROE reason: {r['roe_reason']}")
+
+    if ctx.optimization:
+        lines.append(f"\n--- COA OPTIMIZATION ---")
+        lines.append(
+            f"  Variants: {ctx.optimization.get('variant_count', 0)}, "
+            f"best: {ctx.optimization.get('best_variant_id') or 'N/A'}"
+        )
+        for variant in ctx.optimization.get("top_variants", [])[:3]:
+            lines.append(
+                f"  {variant['title']}: score {variant['score']:.1f}, "
+                f"success {variant['success_probability']:.0%}, "
+                f"escalation {variant['escalation_probability']:.0%}"
+            )
+            if variant.get("tradeoff_explanation"):
+                lines.append(f"      Why: {variant['tradeoff_explanation']}")
+
+    if ctx.operational_effects:
+        lines.append(f"\n--- OPERATIONAL EFFECTS ---")
+        active = ctx.operational_effects.get("active_effects", [])
+        if active:
+            lines.append(f"  Active: {', '.join(active[:6])}")
+        lines.append(
+            f"  Detection modifier: {ctx.operational_effects.get('detection_modifier', 1.0):.2f}, "
+            f"COA success modifier: {ctx.operational_effects.get('coa_success_modifier', 1.0):.2f}, "
+            f"Time modifier: {ctx.operational_effects.get('time_modifier', 1.0):.2f}, "
+            f"Risk modifier: {ctx.operational_effects.get('risk_modifier', 1.0):.2f}"
+        )
 
     if ctx.fired_stimuli:
         lines.append(f"\n--- RECENT STIMULI ---")

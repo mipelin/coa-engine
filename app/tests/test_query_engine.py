@@ -10,6 +10,7 @@ from app.engine.noaa_replay import get_noaa_replay_feed
 from app.engine.query_engine import (
     answer_question,
     build_context,
+    context_to_text,
     detect_language,
     _is_roe_question,
     _is_unsafe,
@@ -122,6 +123,18 @@ class TestFallbackAnswers:
         result = answer_question("What changed in the last few ticks?")
         assert result["llm_used"] is False
         assert "stimuli" in result["sources_used"]
+
+    def test_query_context_includes_fusion_targeting_and_effects(self, client):
+        _load_and_tick(client)
+        client.post(f"{API_PREFIX}/engine/forecast", json={"mode": "baseline", "horizon": 4})
+        ctx = build_context()
+        text = context_to_text(ctx)
+        assert isinstance(ctx.fused_tracks, list)
+        assert isinstance(ctx.top_targets, list)
+        assert isinstance(ctx.operational_effects, dict)
+        assert "--- FUSED TRACKS ---" in text or not ctx.fused_tracks
+        assert "--- TOP TARGETS ---" in text or not ctx.top_targets
+        assert "--- OPERATIONAL EFFECTS ---" in text or not ctx.operational_effects
 
     def test_roe_question(self, client):
         _load_and_tick(client)

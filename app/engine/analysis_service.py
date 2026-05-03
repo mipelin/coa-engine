@@ -32,9 +32,18 @@ from .fusion import FusedTrack, build_fused_tracks
 from .targeting import Target, build_targets
 from .anomaly_detection import detect_anomalies
 from .coa_generation import generate_coas
+from .coa_optimizer import OptimizationResult, optimize_coas
 from .entity_tracking import build_tracks
 from .feature_engineering import compute_features
 from .recommendation import recommend
+from .operational_effects import (
+    OperationalEffects,
+    apply_effects_to_features,
+    apply_effects_to_feasibility,
+    apply_effects_to_simulation,
+    compute_operational_effects,
+    infer_jamming_intensity,
+)
 from .roe_engine import evaluate_roe
 from .scoring import score_coas
 from .simulation import run_simulations
@@ -73,6 +82,8 @@ class AnalysisResult:
     recommendation: Recommendation | None = None
     tracks: dict[str, TrackInfo] = field(default_factory=dict)
     temporal: TemporalSummary | None = None
+    coa_optimization: OptimizationResult | None = None
+    operational_effects: OperationalEffects | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -105,6 +116,14 @@ def run_canonical_analysis(
             [],
             asset_states=context.asset_states,
             asset_inventory=context.asset_inventory,
+        )
+        result.coa_optimization = optimize_coas(
+            [], events, [], scenario_state=context.scenario_state,
+            asset_inventory=context.asset_inventory,
+            asset_states=context.asset_states,
+        )
+        result.operational_effects = compute_operational_effects(
+            context.scenario_state.environment if context.scenario_state else None,
         )
         if include_tracks:
             result.tracks = {}
@@ -142,7 +161,29 @@ def run_canonical_analysis(
         context.asset_states,
         active_contacts=context.active_contacts,
     )
+
+    # --- Operational effects ---
+    env = context.scenario_state.environment if context.scenario_state else None
+    jamming = infer_jamming_intensity(events)
+    effects = compute_operational_effects(env, jamming_intensity=jamming)
+
+    # Apply to features (confidence adjustments)
+    if effects.overall_effectiveness < 0.99:
+        features = apply_effects_to_features(features, effects)
+        anomalies = detect_anomalies(events, features)
+        threats = assess_threats(events, features, anomalies, fused_tracks=fused_tracks)
+
+    # Apply to COA feasibility
+    if effects.feasibility_modifier < 0.99:
+        coas = [apply_effects_to_feasibility(c, effects) for c in coas]
+
     simulations = run_simulations(coas, events, threats, context.scenario_state)
+
+    # Apply to simulation results
+    if effects.overall_effectiveness < 0.99:
+        sim_map = {s.coa_id: s for s in simulations}
+        simulations = [apply_effects_to_simulation(c, sim_map.get(c.coa_id), effects) or sim_map.get(c.coa_id) for c in coas if sim_map.get(c.coa_id)]
+
     scored = score_coas(coas, simulations)
 
     top_threat_confidence = threats[0].confidence if threats else 0.8
@@ -152,6 +193,16 @@ def run_canonical_analysis(
         recommendable,
         asset_states=context.asset_states,
         asset_inventory=context.asset_inventory,
+    )
+
+    # COA optimization — generate variants, simulate, score, ROE, rank
+    coa_optimization = optimize_coas(
+        base_coas=coas,
+        events=events,
+        threats=threats,
+        scenario_state=context.scenario_state,
+        asset_inventory=context.asset_inventory,
+        asset_states=context.asset_states,
     )
 
     result.features = features
@@ -164,13 +215,15 @@ def run_canonical_analysis(
     result.simulations = simulations
     result.scored_coas = scored
     result.recommendation = recommendation
+    result.coa_optimization = coa_optimization
+    result.operational_effects = effects
     if include_tracks:
         result.tracks = build_tracks(events)
     if include_temporal:
         result.temporal = analyze_temporal_patterns(events)
 
     logger.info(
-        "Canonical analysis: source=%s tick=%s events=%d fused_tracks=%d threats=%d targets=%d coas=%d recommendation=%s",
+        "Canonical analysis: source=%s tick=%s events=%d fused_tracks=%d threats=%d targets=%d coas=%d coa_variants=%d recommendation=%s opfx=%.2f",
         context.source,
         context.tick,
         len(events),
@@ -178,6 +231,8 @@ def run_canonical_analysis(
         len(threats),
         len(targets),
         len(scored),
+        len(coa_optimization.optimized_variants) if coa_optimization else 0,
         recommendation.recommended.coa.coa_id if recommendation and recommendation.recommended else None,
+        effects.overall_effectiveness,
     )
     return result

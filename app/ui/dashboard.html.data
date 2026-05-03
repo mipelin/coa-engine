@@ -84,6 +84,7 @@
             <div><label><input type="checkbox" checked data-f="friendly" class="fcheck"> <span data-i18n="map.filter.friendly">Friendly</span></label><label><input type="checkbox" checked data-f="hostile" class="fcheck"> <span data-i18n="map.filter.hostile">Hostile</span></label><label><input type="checkbox" checked data-f="neutral" class="fcheck"> <span data-i18n="map.filter.neutral">Neutral</span></label></div>
             <div><label><input type="checkbox" checked data-f="air" class="fcheck"> <span data-i18n="map.filter.air">Air</span></label><label><input type="checkbox" checked data-f="naval" class="fcheck"> <span data-i18n="map.filter.naval">Naval</span></label><label><input type="checkbox" checked data-f="land" class="fcheck"> <span data-i18n="map.filter.land">Land</span></label><label><input type="checkbox" checked data-f="infra" class="fcheck"> <span data-i18n="map.filter.infra">Infra</span></label></div>
             <div><label><input type="checkbox" checked id="toggle-cable-routes"> <span data-i18n="map.filter.cable_routes">Show Cable Routes</span></label></div>
+            <div><label><input type="checkbox" checked id="toggle-fused-tracks"> <span>Show Fused Tracks</span></label><label><input type="checkbox" id="toggle-raw-contacts"> <span>Show Raw Contacts</span></label></div>
             <div><label><input type="checkbox" id="toggle-live-ais"> <span data-i18n="map.filter.ais_contacts">AIS Contacts</span><span style="display:none">Show NOAA Replay Traffic</span></label><label><input type="checkbox" id="toggle-combat-contacts" checked> <span data-i18n="map.filter.combat_contacts">Combat System</span></label><label><input type="checkbox" id="toggle-sim-entities" checked> <span data-i18n="map.filter.sim_entities">Simulation Entities</span></label></div>
         </details>
     </div>
@@ -156,6 +157,18 @@
                 </div>
             </div>
             <div class="tab-pane" id="pane-contacts">
+                <div class="cop-grid" style="margin-bottom:10px">
+                    <div class="cop-card">
+                        <div class="cop-card-kicker">Heuristic fusion</div>
+                        <h3>Fused Tracks</h3>
+                        <div id="fused-track-list"><div class="empty">No fused tracks yet.</div></div>
+                    </div>
+                    <div class="cop-card">
+                        <div class="cop-card-kicker">Targeting advisory</div>
+                        <h3>Target Panel</h3>
+                        <div id="target-panel"><div class="empty">Select a fused track to inspect target priority.</div></div>
+                    </div>
+                </div>
                 <div class="stats">
                     <div class="st"><div class="v" id="s-ct">0</div><div class="l" data-i18n="contacts.stat.contacts">Contacts</div></div>
                     <div class="st"><div class="v" id="s-tk">0</div><div class="l" data-i18n="contacts.stat.tracks">Tracks</div></div>
@@ -164,7 +177,11 @@
                 </div>
                 <div id="ct-list"><div class="empty" data-i18n="contacts.empty">No contacts</div></div>
             </div>
-            <div class="tab-pane" id="pane-coas"><div id="co-list"><div class="empty" data-i18n="coas.empty">Awaiting analysis</div></div></div>
+            <div class="tab-pane" id="pane-coas">
+                <div id="decision-panel"><div class="empty">Awaiting decision panel</div></div>
+                <div id="effects-panel" style="margin-top:10px"><div class="empty">No operational effects yet.</div></div>
+                <div id="co-list" style="margin-top:10px"><div class="empty" data-i18n="coas.empty">Awaiting analysis</div></div>
+            </div>
             <div class="tab-pane" id="pane-briefing">
                 <div class="bf-actions">
                     <select id="briefing-lang" style="background:#1e293b;border:1px solid #334155;color:#d1d5db;padding:5px 8px;border-radius:3px;font-size:11px;margin-right:6px">
@@ -230,6 +247,16 @@
                         <button id="combat-inject-submarine" type="button" data-i18n="sim.combat_submarine">Add Submarine</button>
                         <button id="combat-inject-suspicious" type="button" data-i18n="sim.combat_suspicious">Inject Suspicious Contact</button>
                     </div>
+                </div>
+                <div class="guide-card demo-mode-card" style="margin-bottom:8px;padding:10px">
+                    <h3>Demo Scenario Mode</h3>
+                    <p>Runs a visible DIANA-style storyline using existing safe simulator and CMS injections: UAV detection, cable severance, vessel correlation, convoy, jamming, recommendation update.</p>
+                    <div class="sim-admin" style="margin:8px 0 0">
+                        <button class="sim-undo" id="demo-mode-run">Run Demo Scenario</button>
+                        <button class="sim-reset" id="demo-mode-clear">Clear Demo State</button>
+                    </div>
+                    <div id="demo-mode-status" class="sim-status" style="display:none"></div>
+                    <div id="demo-mode-steps" class="demo-steps"></div>
                 </div>
                 <div class="guide-card" style="margin-bottom:8px;padding:10px">
                     <h3 data-i18n="sim.quick_scenarios">Quick Scenarios</h3>
@@ -301,6 +328,19 @@
                 <div id="query-response"></div>
             </div>
             <div class="tab-pane" id="pane-timeline">
+                <div class="cop-grid" style="margin-bottom:10px">
+                    <div class="cop-card">
+                        <div class="cop-card-kicker">Replay</div>
+                        <h3>Replay Timeline</h3>
+                        <div id="replay-panel"><div class="empty">No replay data available yet.</div></div>
+                    </div>
+                    <div class="cop-card">
+                        <div class="cop-card-kicker">After Action Review</div>
+                        <h3>AAR</h3>
+                        <div class="cop-actions"><button id="btn-generate-aar">Generate AAR</button></div>
+                        <div id="aar-output"><div class="empty">Generate AAR after a scenario run.</div></div>
+                    </div>
+                </div>
                 <div id="scn-meta" class="scn-info"></div>
                 <div id="tl-list" class="timeline"><div class="empty">Start a scenario to see the stimuli timeline</div></div>
             </div>

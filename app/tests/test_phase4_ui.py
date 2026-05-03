@@ -111,6 +111,12 @@ def test_dashboard_js_polls_llm_status_every_second_without_reconnect_on_languag
     assert "location.reload" not in apply_body
 
 
+def test_dashboard_uses_cop_as_primary_snapshot_source():
+    html = build_dashboard_html()
+    assert "const snapshot = await api('/v1/engine/cop');" in html
+    assert "const snapshot = await api('/v1/engine/analysis');" not in html
+
+
 def test_event_summary_panel_uses_internal_scroll_not_page_scroll():
     html = build_dashboard_html()
     assert ".event-summary-panel{flex:0 0 28%" in html
@@ -157,3 +163,16 @@ def test_dashboard_uses_professional_svg_map_icons():
     assert "function markerSymbolSvg(unitClass, palette, selected = false, source = 'simulation')" in html
     assert "L.divIcon" in html
     assert "unit-icon" in html
+
+
+def test_dashboard_exposes_cop_panels_and_demo_mode():
+    html = build_dashboard_html()
+    assert 'id="fused-track-list"' in html
+    assert 'id="target-panel"' in html
+    assert 'id="decision-panel"' in html
+    assert 'id="effects-panel"' in html
+    assert 'id="replay-panel"' in html
+    assert 'id="aar-output"' in html
+    assert 'id="demo-mode-run"' in html
+    assert 'id="toggle-fused-tracks"' in html
+    assert 'id="toggle-raw-contacts"' in html

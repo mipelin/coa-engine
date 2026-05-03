@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from ..core.session import get_session
 from ..core.schemas import AnalysisRequest
 from ..engine.analysis_service import AnalysisContext, run_canonical_analysis
+from ..engine.coa_optimizer import OptimizationResult
 from ..engine.fusion import serialize_fused_tracks
 from ..engine.state_store import get_state_store
 from ..engine.targeting import serialize_targets
@@ -12,6 +13,18 @@ from ..engine.targeting import serialize_targets
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
 logger = logging.getLogger("coa_engine.api.analysis")
+
+
+def _serialize_optimization(opt: OptimizationResult | None) -> dict | None:
+    if opt is None:
+        return None
+    return {
+        "optimized_variants": [s.model_dump(mode="json") for s in opt.optimized_variants],
+        "variant_parameters": opt.variant_parameters,
+        "best_variant": opt.best_variant.model_dump(mode="json") if opt.best_variant else None,
+        "robustness_ranking": opt.robustness_ranking,
+        "optimization_summary": opt.optimization_summary,
+    }
 
 
 def _get_events(request: AnalysisRequest) -> list:
@@ -81,5 +94,7 @@ async def run_analysis(request: AnalysisRequest):
         "simulations": [s.model_dump(mode="json") for s in result.simulations],
         "scored_coas": [s.model_dump(mode="json") for s in result.scored_coas],
         "recommendation": result.recommendation.model_dump(mode="json") if result.recommendation else None,
+        "coa_optimization": _serialize_optimization(result.coa_optimization),
+        "operational_effects": result.operational_effects.to_dict() if result.operational_effects else {},
         "metadata": result.metadata,
     }
