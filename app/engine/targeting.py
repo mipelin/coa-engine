@@ -14,6 +14,7 @@ from ..core.schemas import (
     SimulationResult,
     ThreatResult,
 )
+from .asset_assignment import SupportingAssetAssignment, assign_supporting_asset
 from .fusion import FusedTrack
 from .roe_engine import evaluate_roe
 
@@ -21,7 +22,7 @@ PRIORITY_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 
 TYPE_BY_CONTACT: dict[str, str] = {
     ContactType.VESSEL.value: "vessel",
-    ContactType.CONVOY.value: "vessel",
+    ContactType.CONVOY.value: "convoy",
     ContactType.SUBMARINE.value: "submarine",
     ContactType.UAV.value: "uav",
     ContactType.RADAR.value: "aircraft",
@@ -33,7 +34,7 @@ TYPE_BY_ENTITY: dict[str, str] = {
     EntityType.ALLIED_VESSEL.value: "vessel",
     EntityType.NEUTRAL_VESSEL.value: "vessel",
     EntityType.UAV.value: "uav",
-    EntityType.CONVOY.value: "vessel",
+    EntityType.CONVOY.value: "convoy",
     EntityType.INFRASTRUCTURE.value: "ground",
     EntityType.ISR_ASSET.value: "aircraft",
 }
@@ -67,12 +68,20 @@ class Target:
     roe_status: str
     rationale: str
     sources: list[str]
+    supporting_asset: SupportingAssetAssignment | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        if self.supporting_asset is not None:
+            data["supporting_asset"] = self.supporting_asset.to_dict()
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Target":
+        support = data.get("supporting_asset")
+        if isinstance(support, dict):
+            data = dict(data)
+            data["supporting_asset"] = SupportingAssetAssignment.from_dict(support)
         return cls(**data)
 
 
@@ -167,6 +176,18 @@ def build_targets(
             priority_level=priority_level,
             fused_track=fused_track,
         )
+        target_lat, target_lon = _target_position(entity_contact, entity_events, fused_track)
+        supporting_asset = assign_supporting_asset(
+            target_id=entity_id,
+            target_type=target_type,
+            recommended_action=recommended_action,
+            priority_level=priority_level,
+            roe_status=roe_status,
+            target_lat=target_lat,
+            target_lon=target_lon,
+            asset_states=getattr(context, "asset_states", None),
+            active_contacts=getattr(context, "active_contacts", None),
+        )
         targets.append(Target(
             id=entity_id,
             type=target_type,
@@ -178,6 +199,7 @@ def build_targets(
             roe_status=roe_status,
             rationale=rationale,
             sources=sources,
+            supporting_asset=supporting_asset,
         ))
 
     targets.sort(
@@ -458,3 +480,18 @@ def _rationale(
     reasons = reasons[:3]
     reasons.append(priority_reason)
     return "; ".join(reasons)
+
+
+def _target_position(
+    contact: Contact | None,
+    events: list[Any],
+    fused_track: FusedTrack | None,
+) -> tuple[float | None, float | None]:
+    if contact is not None:
+        return contact.lat, contact.lon
+    if events:
+        latest = max(events, key=lambda item: item.timestamp)
+        return latest.lat, latest.lon
+    if fused_track is not None:
+        return fused_track.position.get("lat"), fused_track.position.get("lon")
+    return None, None

@@ -214,6 +214,7 @@ class TestCOPStructure:
             assert t.priority_level in ("LOW", "MEDIUM", "HIGH", "CRITICAL")
             assert t.roe_status in ("allowed", "restricted", "requires_authorization", "rejected")
             assert isinstance(t.sources, list)
+            assert hasattr(t, "supporting_asset")
 
     def test_cop_top_targets_limited(self):
         store = _populated_store()

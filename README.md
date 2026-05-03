@@ -6,10 +6,12 @@ A working prototype of an AI-assisted Course of Action (COA) analysis engine for
 
 - Loads synthetic maritime scenarios (Baltic, Arctic, Mediterranean) with hostile, friendly, and neutral entities
 - Runs a tick-based simulation with behavior models (hostile probe, loiter-and-divert, friendly patrol, neutral transit)
+- Produces synthetic multi-source observations and deterministic fusion for a unified operational picture
 - Detects anomalies, assesses threats, and generates explainable threat probabilities per entity
-- Generates advisory courses of action, simulates outcomes with Monte Carlo methods, scores and ranks them
+- Generates advisory targeting support with deterministic supporting-asset suggestions
+- Generates ROE-constrained recommendations, simulates outcomes with Monte Carlo methods, scores and ranks them
 - Evaluates Rules of Engagement (ROE) per COA — restricted actions are flagged, rejected actions are excluded
-- Produces commander-style briefings with threat narratives
+- Produces commander-style briefings with LLM explanation-only enrichment
 - Accepts natural-language queries about current state, with deterministic fallbacks when no LLM is available
 - Provides "what-if" forecasting grounded in simulation — the LLM may rephrase forecasts but never invents them
 - Serves an operational dashboard with live map, contact tracking, COA ranking, and NL query interface
@@ -19,7 +21,7 @@ A working prototype of an AI-assisted Course of Action (COA) analysis engine for
 - **No autonomous targeting or lethal engagement** — advisory outputs only
 - **No command execution** — all recommendations require human approval
 - **No classified data** — all data is synthetic and open-source
-- **No real NATO integrations** — local prototype with clear API boundaries
+- **No real NATO integrations** — MSS-compatible prototype with clear API boundaries
 - **No live data feeds in default mode** — runs on local synthetic data (AIS/NOAA replay available when configured)
 
 ## Quick Start
@@ -95,6 +97,7 @@ coa_engine/
       contact_engine.py         # Real-time contact ingestion (simulation/hybrid/live modes)
       scenario_generator.py     # Scenario templates (Baltic, Arctic, Mediterranean)
       behavior_models.py        # Deterministic behavior policies for entity movement
+      isr_simulation.py         # Synthetic multi-source observation plugins
       behavior_features.py      # Behavior-mode feature extraction
       contact_enrichment.py     # Distance-to-infra, heading-toward, loitering detection
       event_engine.py           # External event processing (cable, jamming, course changes)
@@ -102,6 +105,7 @@ coa_engine/
       feature_engineering.py    # Spatial features (haversine distances, anomaly signals)
       anomaly_detection.py      # Rule-based anomaly scoring (0–100) with explanations
       threat_assessment.py      # Entity-level threat probability aggregation
+      asset_assignment.py       # Advisory supporting-asset assignment for top targets
       coa_generation.py         # Template-based advisory COA generation
       coa_templates.py          # COA template definitions and selection logic
       coa_validation.py         # Asset feasibility and spatial validation
@@ -137,11 +141,15 @@ coa_engine/
       noaa_replay_baltic_hybrid_001.json
       noaa_replay_arctic_submarine_001.json
       noaa_replay_mediterranean_001.json
-    tests/                      # 402 tests
+    tests/                      # automated engine, API, UI, and safety coverage
       test_phase1.py ... test_rate_limit.py
 ```
 
 The engine layer is independent of FastAPI. All analysis modules use deterministic functions with Pydantic schemas.
+
+MSS posture:
+- This is an MSS-compatible prototype interface, not a deployed MSS NATO integration.
+- See [docs/MSS_INTEGRATION.md](docs/MSS_INTEGRATION.md) for payload contracts and integration posture.
 
 ## Real-Time Engine API
 
@@ -193,6 +201,8 @@ The engine layer is independent of FastAPI. All analysis modules use determinist
 
 - **Guardrails**: The query engine refuses questions about lethal targeting, engagement authorization, and ROE bypass. These are checked before any processing.
 - **LLM is explanation-only**: The LLM may rephrase answers and enrich narratives, but it never generates forecasts, selects COAs, or modifies engine state.
+- **Targeting is advisory-only**: Target prioritization and supporting-asset assignment never authorize engagement or weapon release.
+- **Fusion is deterministic**: The system uses synthetic multi-source observations with deterministic fusion. It does not claim real raw ISR processing.
 - **Forecasting is simulation-based**: What-if forecasts are produced by cloning and running the simulation forward. The LLM may rephrase the output but cannot invent outcomes.
 - **ROE enforcement**: Every COA is evaluated against ROE rules. Restricted COAs are flagged with reasons; rejected COAs are excluded from recommendation.
 - **No state mutation from queries**: Natural-language queries and forecasts never modify engine state.
@@ -207,7 +217,7 @@ The engine layer is independent of FastAPI. All analysis modules use determinist
 
 ## Test Status
 
-**402 tests passing.** Full coverage of:
+**Current suite passes in local validation.** Coverage includes:
 
 - Feature engineering, anomaly detection, threat assessment
 - COA generation, simulation, scoring, recommendation

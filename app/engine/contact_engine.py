@@ -137,13 +137,52 @@ class SimulationScenario:
 
         self._update_stimuli_counts()
 
+        store = get_state_store()
+        historical_contacts = [
+            {
+                "entity_id": contact.entity_id,
+                "lat": contact.lat,
+                "lon": contact.lon,
+                "is_hostile": contact.is_hostile,
+                "type": contact.contact_type.value if hasattr(contact.contact_type, "value") else str(contact.contact_type),
+                "contact_type": contact.contact_type.value if hasattr(contact.contact_type, "value") else str(contact.contact_type),
+            }
+            for contact in store.get_contacts()
+        ]
+        trigger_contacts = [
+            {
+                "entity_id": contact.entity_id,
+                "lat": contact.lat,
+                "lon": contact.lon,
+                "is_hostile": contact.is_hostile,
+                "type": contact.contact_type.value if hasattr(contact.contact_type, "value") else str(contact.contact_type),
+                "contact_type": contact.contact_type.value if hasattr(contact.contact_type, "value") else str(contact.contact_type),
+            }
+            for contact in contacts
+        ]
+        priority_targets = []
+        for target in store.get_targets()[:3]:
+            target_contact = store.get_contact(target.id)
+            if target_contact is None:
+                continue
+            priority_targets.append({
+                "entity_id": target.id,
+                "priority_level": target.priority_level,
+                "lat": target_contact.lat,
+                "lon": target_contact.lon,
+            })
+
         # Build behavior context for this tick
         ctx = BehaviorContext(
             tick=self.tick,
             infrastructure=self._get_infrastructure(),
-            contacts=[{"entity_id": eid, "lat": e["lat"], "lon": e["lon"],
-                       "is_hostile": e["hostile"]} for eid, e in self.entities.items()],
+            contacts=[
+                {"entity_id": eid, "lat": e["lat"], "lon": e["lon"], "is_hostile": e["hostile"], "type": e["type"].value if hasattr(e["type"], "value") else str(e["type"])}
+                for eid, e in self.entities.items()
+            ] + historical_contacts + trigger_contacts,
             active_stimuli=list(self._active_stimuli),
+            active_incidents=list(store.state.scenario.active_incidents),
+            priority_targets=priority_targets,
             scenario_bounds=self._bounds,
         )
 

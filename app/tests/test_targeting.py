@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.core.constants import EntityType, EventType
-from app.core.schemas import Contact, ContactType, OperationalEvent
+from app.core.schemas import AssetState, Contact, ContactType, OperationalEvent
 from app.engine.analysis_service import AnalysisContext, run_canonical_analysis
 from app.engine.targeting import serialize_targets
 
@@ -139,6 +139,30 @@ def _context():
                 is_hostile=False,
             ),
         ],
+        asset_states=[
+            AssetState(
+                asset_id="isr-1",
+                asset_type="isr_uav",
+                capabilities=["isr_uav", "surveillance_asset"],
+                quantity_total=1,
+                quantity_available=1,
+                status="available",
+                domain="air",
+                display_name="ISR UAV 1",
+                response_eta_min=20,
+            ),
+            AssetState(
+                asset_id="mpv-1",
+                asset_type="maritime_patrol_vessel",
+                capabilities=["maritime_patrol_vessel", "maritime_patrol_asset"],
+                quantity_total=1,
+                quantity_available=1,
+                status="available",
+                domain="maritime",
+                display_name="Patrol Vessel 1",
+                response_eta_min=40,
+            ),
+        ],
         source="test_targeting",
         tick=3,
         scenario_id="baltic_hybrid_001",
@@ -171,6 +195,8 @@ def test_high_threat_target_gets_safe_high_priority_action_and_roe():
     assert "behavior" in hot.sources
     assert "anomaly" in hot.sources
     assert "Priority" in hot.rationale
+    assert hot.supporting_asset is not None
+    assert hot.supporting_asset.assigned_asset_id in {"isr-1", "mpv-1"}
 
 
 def test_targeting_analysis_does_not_call_llm(monkeypatch):

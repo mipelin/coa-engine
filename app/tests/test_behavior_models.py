@@ -32,6 +32,8 @@ def _ctx(**overrides):
         infrastructure=CRITICAL_INFRASTRUCTURE,
         contacts=[],
         active_stimuli=[],
+        active_incidents=[],
+        priority_targets=[],
         scenario_bounds={"lat_min": 55.0, "lat_max": 60.0, "lon_min": 17.0, "lon_max": 26.0},
     )
     defaults.update(overrides)
@@ -52,6 +54,7 @@ class TestHostileProbeInfrastructure:
         assert r.attributes["behavior_mode"] == "hostile_probe_infrastructure"
         assert r.attributes["intent"] == "probe_infrastructure"
         assert r.attributes["target_infra"] == "Baltic Cable Alpha"
+        assert r.attributes["behavior_rationale"]
         assert r.lat > entity["lat"]  # moved toward cable at lat 57.5
 
     def test_slows_when_close(self):
@@ -75,6 +78,15 @@ class TestHostileProbeInfrastructure:
         r2 = policy(entity, ctx, rng_state=1)
         assert r1.lat == r2.lat
         assert r1.lon == r2.lon
+
+    def test_switches_toward_remaining_cable_after_severance(self):
+        policy = HostileProbeInfrastructure(target_infra_name="Baltic Cable Alpha")
+        entity = {"lat": 57.0, "lon": 18.0, "speed": 5.0, "heading": 90.0}
+        ctx = _ctx(active_stimuli=["cable_severance"])
+
+        r = policy(entity, ctx, rng_state=1)
+        assert "cable_severance" in r.attributes["reacting_to"]
+        assert "remaining infrastructure" in r.attributes["behavior_rationale"].lower()
 
 
 class TestHostileLoiterThenDivert:
@@ -105,6 +117,7 @@ class TestHostileLoiterThenDivert:
         r = policy(entity, ctx, rng_state=1)
         assert r.attributes["intent"] == "divert"
         assert "cable_severance" in r.attributes["reacting_to"]
+        assert "remaining infrastructure" in r.attributes["behavior_rationale"].lower()
 
     def test_stays_diverted_after_trigger(self):
         policy = HostileLoiterThenDivert(divert_tick=5)
@@ -134,6 +147,16 @@ class TestFriendlyPatrolMonitor:
         r = policy(entity, ctx, rng_state=1)
         assert r.attributes["intent"] == "monitor"
         assert any("hostile_VES-HOSTILE" in x for x in r.attributes["reacting_to"])
+
+    def test_reacts_to_high_priority_target(self):
+        policy = FriendlyPatrolMonitor(react_range_km=50.0)
+        entity = {"lat": 57.6, "lon": 18.5, "speed": 12.0, "heading": 90.0}
+        ctx = _ctx(priority_targets=[{"entity_id": "VES-HOT", "priority_level": "CRITICAL", "lat": 57.7, "lon": 18.6}])
+
+        r = policy(entity, ctx, rng_state=1)
+        assert r.attributes["intent"] == "monitor"
+        assert any("priority_target_VES-HOT" in x for x in r.attributes["reacting_to"])
+        assert "highest-priority target" in r.attributes["behavior_rationale"]
 
     def test_no_reaction_to_distant_hostile(self):
         policy = FriendlyPatrolMonitor(react_range_km=10.0)
@@ -175,6 +198,16 @@ class TestNeutralTransit:
         ctx = _ctx(tick=1)
         r = policy(entity, ctx, rng_state=1)
         assert r.attributes["reacting_to"] == []
+
+    def test_avoids_nearby_jamming_zone(self):
+        route = [(56.0, 18.0), (56.5, 18.5)]
+        policy = NeutralTransit(route=route, transit_speed=10.0)
+        entity = {"lat": 56.0, "lon": 18.0, "speed": 10.0, "heading": 0.0, "_bhv_wp_idx": 0}
+        ctx = _ctx(contacts=[{"entity_id": "JAM-1", "lat": 56.02, "lon": 18.02, "is_hostile": False, "type": "jamming"}])
+
+        r = policy(entity, ctx, rng_state=1)
+        assert any("avoid_" in item for item in r.attributes["reacting_to"])
+        assert "avoid nearby jamming" in r.attributes["behavior_rationale"].lower()
 
 
 class TestMakePolicy:

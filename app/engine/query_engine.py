@@ -318,6 +318,7 @@ def build_context() -> QueryContext:
                 "roe_status": target.roe_status,
                 "sources": target.sources,
                 "rationale": target.rationale,
+                "supporting_asset": target.supporting_asset.to_dict() if target.supporting_asset else None,
             }
             for target in top_targets
         ],
@@ -408,6 +409,12 @@ def context_to_text(ctx: QueryContext) -> str:
                 f"threat {target['threat_score']:.2f}, action {target['recommended_action']}, "
                 f"ROE {target['roe_status']}"
             )
+            if target.get("supporting_asset"):
+                support = target["supporting_asset"]
+                lines.append(
+                    f"      Supporting asset: {support.get('assigned_asset_id', 'none')} "
+                    f"({support.get('asset_type', 'none')}) for {support.get('assignment_role', 'monitor')}"
+                )
             if target.get("rationale"):
                 lines.append(f"      Rationale: {target['rationale']}")
 

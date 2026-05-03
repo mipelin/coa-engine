@@ -131,6 +131,7 @@ class COPTargetPanel:
     roe_status: str
     rationale: str
     sources: list[str]
+    supporting_asset: dict[str, Any] | None = None
 
 
 @dataclass
@@ -312,6 +313,7 @@ def _build_targets(store: StateStore) -> list[COPTargetPanel]:
             roe_status=t.roe_status,
             rationale=t.rationale,
             sources=t.sources,
+            supporting_asset=t.supporting_asset.to_dict() if t.supporting_asset else None,
         ))
     return panels
 
@@ -569,6 +571,7 @@ def cop_to_dict(cop: COPResult) -> dict[str, Any]:
                 "roe_status": t.roe_status,
                 "rationale": t.rationale,
                 "sources": t.sources,
+                "supporting_asset": t.supporting_asset,
             }
             for t in cop.targets
         ],
@@ -584,6 +587,7 @@ def cop_to_dict(cop: COPResult) -> dict[str, Any]:
                 "roe_status": t.roe_status,
                 "rationale": t.rationale,
                 "sources": t.sources,
+                "supporting_asset": t.supporting_asset,
             }
             for t in cop.top_targets
         ],

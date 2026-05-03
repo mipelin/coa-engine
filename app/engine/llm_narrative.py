@@ -126,6 +126,12 @@ def build_compact_briefing_context(
                 f"action {target.get('recommended_action', '?')}, "
                 f"ROE {target.get('roe_status', '?')}"
             )
+            support = target.get("supporting_asset")
+            if support:
+                lines.append(
+                    f"      Supporting asset: {support.get('assigned_asset_id', 'none')} "
+                    f"({support.get('asset_type', 'none')}) for {support.get('assignment_role', 'monitor')}"
+                )
             if target.get("rationale"):
                 lines.append(f"      Rationale: {target['rationale']}")
     if recommended_coa:

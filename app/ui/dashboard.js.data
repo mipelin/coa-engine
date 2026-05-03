@@ -950,6 +950,7 @@ function popupHtml(contact) {
   if (attrs.intent) lines.push(`${esc(t('map.intent', 'Intent'))}: ${esc(attrs.intent)}`);
   if (attrs.target_infra) lines.push(`${esc(t('map.target_infra', 'Target'))}: ${esc(attrs.target_infra)}`);
   if (attrs.reacting_to && attrs.reacting_to.length) lines.push(`${esc(t('map.reacting_to', 'Reacting to'))}: ${esc(attrs.reacting_to.join(', '))}`);
+  if (attrs.behavior_rationale) lines.push(`${esc(t('map.behavior_rationale', 'Behavior rationale'))}: ${esc(attrs.behavior_rationale)}`);
   return lines.join('<br>');
 }
 
@@ -1169,6 +1170,15 @@ function renderTargetPanel() {
       <div class="cop-chips">
         ${(target.sources || []).map((src) => `<span class="cop-chip">${esc(provenanceLabel(src))}</span>`).join('')}
       </div>
+      ${target.supporting_asset ? `
+      <div class="cop-item-sub" style="margin-top:8px">
+        Supporting asset: ${esc(target.supporting_asset.assigned_asset_id || 'none')} ·
+        ${esc(target.supporting_asset.asset_type || 'none')} ·
+        ${esc(target.supporting_asset.assignment_role || 'monitor')} ·
+        suitability ${esc(String(target.supporting_asset.suitability_score ?? 0))}
+      </div>
+      <div class="cop-item-sub">${esc(target.supporting_asset.rationale || '')}</div>
+      ` : '<div class="cop-item-sub" style="margin-top:8px">Supporting asset: no suitable asset available.</div>'}
       <div class="cop-item-sub">${esc(target.rationale || 'No rationale available.')}</div>
     </div>
   `;

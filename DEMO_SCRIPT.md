@@ -20,7 +20,7 @@ In the top header bar, select **Baltic Sea** from the scenario dropdown, then cl
 
 Wait for a few ticks. The map should show red hostile markers, blue friendly markers, and green infrastructure icons.
 
-> "All data is synthetic. This is not connected to any live system."
+> "All data is synthetic. The observation layer is synthetic multi-source sensing with deterministic fusion. This is not connected to any live system."
 
 ## 2. Threat Evolution (0:30 – 1:30)
 
@@ -44,7 +44,7 @@ Point to the ROE badge and reason strip on each COA card.
 
 Point to the recommended COA.
 
-> "The recommended COA is highlighted with a rationale and tradeoffs. This is advisory only — a human decides."
+> "The recommended COA is highlighted with a rationale and tradeoffs. Targeting support and supporting-asset suggestions are advisory only, and the recommendation remains ROE-constrained. A human decides."
 
 ## 4. Natural-Language Query (2:30 – 3:15)
 
@@ -72,8 +72,8 @@ Show the COA-specific forecast with different threat projection.
 
 Switch to the Swagger docs tab. Show the endpoint list.
 
-> "Everything you saw is available through REST API — state queries, contact management, COA ranking, natural-language queries, and real-time event streaming. The engine layer is framework-agnostic."
+> "Everything you saw is available through REST API — state queries, synthetic observation ingestion, deterministic fusion outputs, contact management, COA ranking, natural-language queries, and real-time event streaming. The engine layer is framework-agnostic."
 
-> "To be clear: this is a human decision-support tool only. No autonomous targeting. No command execution. All outputs are advisory and require human review. The prototype uses only synthetic data."
+> "To be clear: this is a human decision-support tool only. No autonomous targeting. No engagement authorization. No command execution. All outputs are advisory and require human review. The prototype uses only synthetic data and MSS-compatible interfaces."
 
 > "The MVP demonstrates that a modular software layer can provide explainable, grounded decision support for operational scenarios — without any autonomous action."

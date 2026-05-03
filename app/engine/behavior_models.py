@@ -76,6 +76,8 @@ class BehaviorContext:
     infrastructure: list[dict[str, Any]] = field(default_factory=list)
     contacts: list[dict[str, Any]] = field(default_factory=list)
     active_stimuli: list[str] = field(default_factory=list)
+    active_incidents: list[str] = field(default_factory=list)
+    priority_targets: list[dict[str, Any]] = field(default_factory=list)
     scenario_bounds: dict[str, float] | None = None
 
 
@@ -111,10 +113,16 @@ class HostileProbeInfrastructure:
     probe_offset_heading: float = 30.0  # offset when very close to target
 
     def _pick_target(self, ctx: BehaviorContext) -> dict[str, Any] | None:
-        if self.target_infra_name:
+        if self.target_infra_name and "cable_severance" not in ctx.active_stimuli:
             for infra in ctx.infrastructure:
                 if infra.get("name") == self.target_infra_name:
                     return infra
+        if "cable_severance" in ctx.active_stimuli:
+            cables = [i for i in ctx.infrastructure if i.get("type") == "subsea_cable"]
+            if self.target_infra_name:
+                alternate = [infra for infra in cables if infra.get("name") != self.target_infra_name]
+                if alternate:
+                    return alternate[0]
         # Default: first subsea_cable or nearest infra
         cables = [i for i in ctx.infrastructure if i.get("type") == "subsea_cable"]
         return cables[0] if cables else (ctx.infrastructure[0] if ctx.infrastructure else None)
@@ -131,6 +139,7 @@ class HostileProbeInfrastructure:
         intent = "probe_infrastructure"
         target_name = target.get("name", "unknown") if target else "none"
         reacting_to = []
+        rationale = "Continuing deterministic infrastructure probing pattern."
 
         if target:
             dist = haversine_km(lat, lon, target["lat"], target["lon"])
@@ -139,6 +148,11 @@ class HostileProbeInfrastructure:
             if dist > self.close_range_km:
                 heading = bearing
                 speed = self.approach_speed
+                if "cable_severance" in ctx.active_stimuli:
+                    reacting_to.append("cable_severance")
+                    rationale = f"Shifting probe toward remaining infrastructure after cable severance at {target_name}."
+                else:
+                    rationale = f"Approaching {target_name} on a deterministic probe route."
             else:
                 # Close — slow down and offset to simulate probe/loom behavior
                 speed = self.slow_speed
@@ -146,6 +160,7 @@ class HostileProbeInfrastructure:
                 offset = self.probe_offset_heading if ctx.tick % 2 == 0 else -self.probe_offset_heading
                 heading = (bearing + offset) % 360
                 reacting_to.append(f"proximity_to_{target_name}")
+                rationale = f"Loitering near {target_name} to sustain probing behavior."
 
             lat, lon = move_along_heading(lat, lon, heading, speed)
 
@@ -167,6 +182,7 @@ class HostileProbeInfrastructure:
                 "intent": intent,
                 "target_infra": target_name,
                 "reacting_to": reacting_to,
+                "behavior_rationale": rationale,
             },
         )
 
@@ -201,6 +217,7 @@ class HostileLoiterThenDivert:
         speed = entity.get("speed", self.loiter_speed)
         heading = entity.get("heading", 0.0)
         reacting_to: list[str] = []
+        rationale = "Maintaining deterministic loiter pattern."
 
         # Check divert condition
         stimulus_active = (
@@ -210,7 +227,19 @@ class HostileLoiterThenDivert:
         diverted = entity.get("_bhv_diverted", False)
 
         if not diverted and (stimulus_active or tick_threshold):
-            heading = self.divert_heading
+            if stimulus_active and ctx.infrastructure:
+                cables = [infra for infra in ctx.infrastructure if infra.get("type") == "subsea_cable"]
+                if cables:
+                    alt_target = cables[-1]
+                    heading = bearing_to(lat, lon, alt_target["lat"], alt_target["lon"])
+                    reacting_to.append(f"remaining_infrastructure_{alt_target.get('name', 'unknown')}")
+                    rationale = f"Diverting toward remaining infrastructure after {self.divert_stimulus}."
+                else:
+                    heading = self.divert_heading
+                    rationale = "Divert trigger active; no alternate infrastructure available."
+            else:
+                heading = self.divert_heading
+                rationale = "Divert tick threshold reached."
             speed = self.divert_speed
             diverted = True
             if stimulus_active:
@@ -232,6 +261,8 @@ class HostileLoiterThenDivert:
             dlon = (center_lon - lon) * 0.1
             lat, lon = move_along_heading(lat + dlat, lon + dlon, heading, speed)
             intent = "loiter"
+            if stimulus_active:
+                rationale = f"Holding loiter while reacting to {self.divert_stimulus}."
 
         if ctx.scenario_bounds:
             b = ctx.scenario_bounds
@@ -251,6 +282,7 @@ class HostileLoiterThenDivert:
                 "intent": intent,
                 "target_infra": "",
                 "reacting_to": reacting_to,
+                "behavior_rationale": rationale,
                 "_bhv_diverted": diverted,
             },
         )
@@ -284,10 +316,45 @@ class FriendlyPatrolMonitor:
         speed = entity.get("speed", self.patrol_speed)
         heading = entity.get("heading", self.patrol_heading_a)
         reacting_to: list[str] = []
+        rationale = "Maintaining deterministic patrol sweep."
 
         # Check for nearby hostile contacts
         nearest_hostile: dict[str, Any] | None = None
         nearest_dist = float("inf")
+        highest_priority = None
+        for target in ctx.priority_targets:
+            if target.get("priority_level") not in {"HIGH", "CRITICAL"}:
+                continue
+            highest_priority = target
+            break
+        if highest_priority is not None:
+            target_lat = highest_priority.get("lat")
+            target_lon = highest_priority.get("lon")
+            if target_lat is not None and target_lon is not None:
+                heading = bearing_to(lat, lon, target_lat, target_lon)
+                speed = self.react_speed
+                reacting_to.append(f"priority_target_{highest_priority.get('entity_id', 'unknown')}")
+                intent = "monitor"
+                rationale = f"Shifting toward highest-priority target {highest_priority.get('entity_id', 'unknown')}."
+                lat, lon = move_along_heading(lat, lon, heading, speed)
+                if ctx.scenario_bounds:
+                    b = ctx.scenario_bounds
+                    lat = clamp(lat, b["lat_min"], b["lat_max"])
+                    lon = clamp(lon, b["lon_min"], b["lon_max"])
+                if is_on_land(lat, lon):
+                    snap = snap_to_water(lat, lon)
+                    if snap:
+                        lat, lon = snap
+                return BehaviorResult(
+                    lat=lat, lon=lon, speed=round(speed, 2), heading=round(heading, 1),
+                    attributes={
+                        "behavior_mode": "friendly_patrol_monitor",
+                        "intent": intent,
+                        "target_infra": "",
+                        "reacting_to": reacting_to,
+                        "behavior_rationale": rationale,
+                    },
+                )
         for c in ctx.contacts:
             if not c.get("is_hostile", False):
                 continue
@@ -302,12 +369,14 @@ class FriendlyPatrolMonitor:
             speed = self.react_speed
             reacting_to.append(f"hostile_{nearest_hostile.get('entity_id', 'unknown')}")
             intent = "monitor"
+            rationale = f"Repositioning to monitor nearby hostile {nearest_hostile.get('entity_id', 'unknown')}."
         else:
             # Patrol: back and forth
             phase = (ctx.tick // self.patrol_flip_ticks) % 2
             heading = self.patrol_heading_a if phase == 0 else self.patrol_heading_b
             speed = self.patrol_speed
             intent = "patrol"
+            rationale = "No high-priority hostile nearby; continuing patrol route."
 
         lat, lon = move_along_heading(lat, lon, heading, speed)
 
@@ -329,6 +398,7 @@ class FriendlyPatrolMonitor:
                 "intent": intent,
                 "target_infra": "",
                 "reacting_to": reacting_to,
+                "behavior_rationale": rationale,
             },
         )
 
@@ -355,6 +425,8 @@ class NeutralTransit:
         lat = entity["lat"]
         lon = entity["lon"]
         speed = entity.get("speed", self.transit_speed)
+        reacting_to: list[str] = []
+        rationale = "Following deterministic civilian transit route."
 
         # Determine current waypoint index
         wp_idx = entity.get("_bhv_wp_idx", 0)
@@ -366,7 +438,8 @@ class NeutralTransit:
                     "behavior_mode": "neutral_transit",
                     "intent": "transit",
                     "target_infra": "",
-                    "reacting_to": [],
+                    "reacting_to": reacting_to,
+                    "behavior_rationale": rationale,
                 },
             )
 
@@ -379,6 +452,20 @@ class NeutralTransit:
             target_lat, target_lon = self.route[wp_idx]
 
         heading = bearing_to(lat, lon, target_lat, target_lon)
+        hazard = next(
+            (
+                c for c in ctx.contacts
+                if c.get("type") in {"jamming", "cable_event"} or c.get("contact_type") in {"jamming", "cable_event"}
+            ),
+            None,
+        )
+        if hazard is not None:
+            hazard_lat = float(hazard.get("lat", lat))
+            hazard_lon = float(hazard.get("lon", lon))
+            if haversine_km(lat, lon, hazard_lat, hazard_lon) <= 35.0:
+                heading = (bearing_to(hazard_lat, hazard_lon, lat, lon) + 35.0) % 360
+                reacting_to.append(f"avoid_{hazard.get('entity_id', hazard.get('type', 'hazard'))}")
+                rationale = "Adjusting transit route to avoid nearby jamming/high-risk zone."
         speed = self.transit_speed
         lat, lon = move_along_heading(lat, lon, heading, speed)
 
@@ -399,7 +486,8 @@ class NeutralTransit:
                 "behavior_mode": "neutral_transit",
                 "intent": "transit",
                 "target_infra": "",
-                "reacting_to": [],
+                "reacting_to": reacting_to,
+                "behavior_rationale": rationale,
                 "_bhv_wp_idx": wp_idx,
             },
         )

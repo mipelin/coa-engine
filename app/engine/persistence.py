@@ -344,7 +344,7 @@ def _serialize_targets(targets: list[Any]) -> str:
 def _deserialize_targets(raw: str) -> list[Any]:
     from .targeting import Target
     data = json.loads(raw)
-    return [Target(**d) if isinstance(d, dict) else d for d in data]
+    return [Target.from_dict(d) if isinstance(d, dict) else d for d in data]
 
 
 def _serialize_optimization(opt: Any | None) -> str | None:
