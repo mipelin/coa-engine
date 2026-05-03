@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 
-from .llm_client import get_llm_client, LLMResult
+from .llm_client import LLMResult
 from .llm_orchestrator import get_llm_orchestrator
 from ..core.schemas import OperationalEvent, ThreatResult
 from ..i18n.languages import LANGUAGE_NAMES, final_language_instruction, resolve_language
@@ -31,8 +31,6 @@ Never use: target, weapon, strike, engage, kill, lethal, fire, destroy, neutrali
 
 def enrich_threat_narrative(threats: list[ThreatResult], events: list[OperationalEvent]) -> str | None:
     """LLM produces a natural-language threat summary."""
-    llm = get_llm_client()
-
     threat_text = "\n".join(
         f"- {t.entity_id}: {t.threat_probability:.0%} ({t.threat_level.value}), "
         f"drivers: {', '.join(t.main_drivers[:3])}"
@@ -42,14 +40,14 @@ def enrich_threat_narrative(threats: list[ThreatResult], events: list[Operationa
 
 {threat_text}
 
-Provide a concise threat narrative summary."""
+Provide a concise threat narrative summary in English."""
 
-    result = llm._chat_raw(
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT_THREAT},
-            {"role": "user", "content": user_prompt},
-        ],
-        purpose="threat_narrative",
+    result = get_llm_orchestrator().run_chat(
+        task_type="threat_narrative",
+        language="en",
+        system_prompt=SYSTEM_PROMPT_THREAT,
+        user_prompt=user_prompt,
+        max_tokens=320,
     )
     if result.ok:
         logger.info("Threat narrative enriched (%d chars)", len(result.text))
@@ -171,10 +169,10 @@ def build_compact_briefing_context(
         if active:
             lines.append(f"  Active effects: {', '.join(active[:6])}")
         lines.append(
-            f"  Detection {operational_effects.get('detection_modifier', 1.0):.2f}, "
+            f"  Detection {operational_effects.get('threat_detection_modifier', 1.0):.2f}, "
             f"COA success {operational_effects.get('coa_success_modifier', 1.0):.2f}, "
-            f"Time {operational_effects.get('time_modifier', 1.0):.2f}, "
-            f"Risk {operational_effects.get('risk_modifier', 1.0):.2f}"
+            f"Time {operational_effects.get('coa_time_modifier', 1.0):.2f}, "
+            f"Risk {operational_effects.get('coa_risk_modifier', 1.0):.2f}"
         )
 
     if optimization_summary:
@@ -236,7 +234,6 @@ def translate_briefing(briefing: "Briefing", language: str) -> dict | None:
     """Translate all briefing text fields to the target language via LLM. Returns a dict of translated fields."""
     if language == "en":
         return None
-    llm = get_llm_client()
     lang_name = LANGUAGE_NAMES.get(language, "English")
 
     fields = json.dumps({
@@ -262,7 +259,13 @@ def translate_briefing(briefing: "Briefing", language: str) -> dict | None:
 
     user_prompt = f"Translate this briefing to {lang_name}:\n\n{fields}"
 
-    result = llm.call_translation(system_prompt, user_prompt)
+    result = get_llm_orchestrator().run_chat(
+        task_type="translation",
+        language=language,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        max_tokens=900,
+    )
     if not result.ok:
         logger.warning("Briefing translation to %s failed: %s", lang_name, result.fallback_reason)
         return None
@@ -285,7 +288,6 @@ def translate_ui_strings(strings: dict[str, str], language: str) -> dict[str, st
     """Translate UI strings to the target language via LLM in batches."""
     if language == "en" or not strings:
         return None
-    llm = get_llm_client()
     lang_name = LANGUAGE_NAMES.get(language, "English")
 
     items = list(strings.items())
@@ -305,7 +307,13 @@ def translate_ui_strings(strings: dict[str, str], language: str) -> dict[str, st
         )
         user_prompt = f"Translate these UI strings to {lang_name}:\n\n{batch_json}"
 
-        llm_result = llm.call_translation(system_prompt, user_prompt)
+        llm_result = get_llm_orchestrator().run_chat(
+            task_type="translation",
+            language=language,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=900,
+        )
         if not llm_result.ok:
             logger.warning("UI translation batch to %s failed: %s", lang_name, llm_result.fallback_reason)
             continue
@@ -327,8 +335,6 @@ def translate_ui_strings(strings: dict[str, str], language: str) -> dict[str, st
 
 def entity_risk_narrative(entity_id: str, threat: ThreatResult, events: list[OperationalEvent]) -> str | None:
     """LLM explains risk per entity in plain language."""
-    llm = get_llm_client()
-
     entity_events = [e for e in events if e.entity_id == entity_id]
     event_summary = "\n".join(
         f"- {e.timestamp.strftime('%HZ')}: {e.event_type.value} — {e.description[:100]}"
@@ -341,14 +347,14 @@ Drivers: {', '.join(t for t in threat.main_drivers)}
 Recent events:
 {event_summary}
 
-Provide a 1-2 sentence risk narrative for this entity."""
+Provide a 1-2 sentence risk narrative for this entity in English."""
 
-    result = llm._chat_raw(
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT_ENTITY},
-            {"role": "user", "content": user_prompt},
-        ],
-        purpose="entity_risk",
+    result = get_llm_orchestrator().run_chat(
+        task_type="entity_risk",
+        language="en",
+        system_prompt=SYSTEM_PROMPT_ENTITY,
+        user_prompt=user_prompt,
+        max_tokens=200,
     )
     if result.ok:
         logger.info("Entity narrative for %s (%d chars)", entity_id, len(result.text))

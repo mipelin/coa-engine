@@ -31,7 +31,7 @@ async def lifespan(application: FastAPI):
         settings.llm_model,
         settings.llm_timeout_seconds,
         settings.llm_max_tokens,
-        "yes" if settings.llm_api_key else "no",
+        "yes" if settings.llm_api_key_present else "no",
     )
 
     from .core.session import get_session

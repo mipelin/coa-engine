@@ -909,6 +909,7 @@ function renderContactDetails() {
       <div class="cd-lbl">Fusion</div>
       <div class="cd-list">confidence=${esc(fmtPct(selectedTrack.fused_confidence))} · source_count=${esc(String(selectedTrack.source_count || 0))}</div>
       <div class="cd-list">${esc((selectedTrack.sources || []).map((src) => provenanceLabel(src)).join(', ') || '—')}</div>
+      <div class="cd-list">Synthetic multi-source observations with deterministic fusion</div>
     </div>` : ''}
     <div class="cd-section">
       <div class="cd-lbl">${esc(t('map.flags', 'Flags'))}</div>
@@ -1134,6 +1135,7 @@ function renderFusedTrackList() {
           <span class="cop-chip">confidence ${esc(fmtPct(track.fused_confidence))}</span>
           <span class="cop-chip">sources ${esc(String(track.source_count || 0))}</span>
           <span class="cop-chip">${esc((track.sources || []).map((src) => provenanceLabel(src)).join(' / '))}</span>
+          <span class="cop-chip">Synthetic observation</span>
         </div>
         <div class="cop-item-sub">${esc(track.rationale || 'No fusion rationale available.')}</div>
         <div class="ct-actions" style="margin-top:6px">
@@ -1267,10 +1269,10 @@ function renderOperationalEffectsPanel() {
   }
   const active = effects.active_effects || [];
   const metrics = [
-    {label: 'Detection ↓', value: effects.detection_modifier, note: 'Detection reduced'},
+    {label: 'Detection ↓', value: effects.threat_detection_modifier, note: 'Detection reduced'},
     {label: 'Success ↓', value: effects.coa_success_modifier, note: 'COA success reduced'},
-    {label: 'Time ↑', value: effects.time_modifier, note: 'Time to execute increased'},
-    {label: 'Risk ↑', value: effects.risk_modifier, note: 'Operational risk increased'},
+    {label: 'Time ↑', value: effects.coa_time_modifier, note: 'Time to execute increased'},
+    {label: 'Risk ↑', value: effects.coa_risk_modifier, note: 'Operational risk increased'},
   ];
   node.innerHTML = `
     <div class="cop-card">
@@ -3157,7 +3159,7 @@ window.addEventListener('load', async () => {
   await refreshLlmHealth();
   await refreshLlmStatus();
   window.setInterval(refreshLlmStatus, 1000);
-  window.setInterval(refreshLlmHealth, 3000);
+  window.setInterval(refreshLlmHealth, 30000);
   logLine(t('log.dashboard_ready', 'Dashboard ready. Select a scenario and click Start.'));
   logLine(t('log.tip_quick_actions', 'Tip: use the big quick actions in Simulator if you want immediate threat/COA changes.'));
   logLine(t('log.tip_playbooks', 'Use mission playbooks for realistic test cases: maritime threat, UAV near airport, EW escalation, or allied support.'));

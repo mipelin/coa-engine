@@ -81,14 +81,17 @@ class Settings(BaseSettings):
     simulation_combined_boost: float = 0.30
 
     # LLM configuration (llama.cpp OpenAI-compatible endpoint)
-    llm_base_url: str = "http://192.168.4.13:8080/v1"
-    llm_api_key: str = "sk-mi-ia-secreta"
+    llm_base_url: str = "http://192.168.4.14:8080/v1"
+    llm_api_key: str = "none"
     llm_model: str = "local"
-    llm_timeout_seconds: float = 300.0
+    llm_timeout_seconds: float = 25.0
     llm_enabled: bool = True
-    llm_max_tokens: int = 2048
+    llm_max_tokens: int = 1024
     llm_queue_timeout_seconds: float = 30.0
-    llm_health_timeout_seconds: float = 10.0
+    llm_health_timeout_seconds: float = 5.0
+
+    # Synthetic ISR simulation
+    enable_isr_simulation: bool = True
 
     # API Security
     api_key_auth_enabled: bool = False
@@ -130,6 +133,17 @@ class Settings(BaseSettings):
     replay_max_snapshots: int = 500
 
     model_config = {"env_prefix": "COA_"}
+
+    @property
+    def llm_api_key_effective(self) -> str:
+        raw = (self.llm_api_key or "").strip()
+        if raw.lower() in {"", "none", "null", "false", "off"}:
+            return ""
+        return raw
+
+    @property
+    def llm_api_key_present(self) -> bool:
+        return bool(self.llm_api_key_effective)
 
 
 settings = Settings()

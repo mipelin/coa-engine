@@ -7,6 +7,7 @@ from typing import Any
 
 from ..core.constants import EntityType, EventType
 from ..core.schemas import AnomalyResult, Contact, FeatureVector, OperationalEvent, ThreatResult
+from .isr_simulation import BaseObservation
 from .feature_engineering import haversine_km
 
 FUSION_RADIUS_KM = 8.0
@@ -52,6 +53,7 @@ class FusedTrack:
     anomaly_support: float
     threat_support: float
     rationale: str
+    provenance: str = "synthetic multi-source observations with deterministic fusion"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -94,11 +96,12 @@ def build_fused_tracks(
     *,
     events: list[OperationalEvent],
     contacts: list[Contact] | None = None,
+    observations: list[BaseObservation] | None = None,
     anomalies: list[AnomalyResult] | None = None,
     threats: list[ThreatResult] | None = None,
     features: list[FeatureVector] | None = None,
 ) -> list[FusedTrack]:
-    observations = _normalize_observations(events, contacts or [])
+    observations = _normalize_observations(events, contacts or [], observations or [])
     clusters: list[_FusionCluster] = []
     for observation in observations:
         cluster = _best_cluster_match(observation, clusters)
@@ -137,12 +140,15 @@ def build_fused_tracks(
 def _normalize_observations(
     events: list[OperationalEvent],
     contacts: list[Contact],
+    simulated_observations: list[BaseObservation],
 ) -> list[_Observation]:
     observations: list[_Observation] = []
     for event in events:
         observations.append(_observation_from_event(event))
     for contact in contacts:
         observations.append(_observation_from_contact(contact))
+    for observation in simulated_observations:
+        observations.append(_observation_from_isr(observation))
     observations.sort(
         key=lambda item: (
             item.timestamp,
@@ -207,6 +213,39 @@ def _observation_from_contact(contact: Contact) -> _Observation:
         speed=contact.speed,
         allegiance=str(attrs.get("allegiance", "unknown")).lower() or "unknown",
         behavior_flags=_contact_behavior_flags(contact),
+    )
+
+
+def _observation_from_isr(observation: BaseObservation) -> _Observation:
+    attrs = observation.attributes or {}
+    source = {
+        "AIS": "ais",
+        "CMS": "combat_system",
+        "SAT": "satellite",
+        "OSINT": "osint",
+        "ESM": "esm",
+    }.get(str(observation.source_type).upper(), str(observation.source_type).lower())
+    track_type = str(observation.entity_type or "unknown").lower()
+    if track_type == "uav":
+        track_type = "uav"
+    return _Observation(
+        observation_id=observation.id,
+        entity_id=str(attrs.get("entity_id", observation.id)),
+        lat=observation.position.lat,
+        lon=observation.position.lon,
+        timestamp=observation.timestamp,
+        source=source,
+        confidence=observation.confidence,
+        track_type=_normalize_track_type(
+            entity_type=track_type,
+            event_type="",
+            subtype=str(attrs.get("subtype", track_type)),
+        ),
+        subtype=str(attrs.get("subtype", track_type)),
+        heading=observation.kinematics.heading,
+        speed=observation.kinematics.speed,
+        allegiance=str(attrs.get("allegiance", "unknown")).lower() or "unknown",
+        behavior_flags=list(attrs.get("behavior_flags", [])),
     )
 
 

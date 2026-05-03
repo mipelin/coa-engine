@@ -210,4 +210,9 @@ def test_dashboard_polls_llm_health_and_status():
     html = build_dashboard_html()
     assert "await api('/v1/engine/llm/health')" in html
     assert "window.setInterval(refreshLlmStatus, 1000);" in html
-    assert "window.setInterval(refreshLlmHealth, 3000);" in html
+    assert "window.setInterval(refreshLlmHealth, 30000);" in html
+
+
+def test_dashboard_labels_synthetic_fusion_provenance():
+    html = build_dashboard_html()
+    assert "Synthetic multi-source observations with deterministic fusion" in html

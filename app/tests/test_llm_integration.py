@@ -21,6 +21,7 @@ class FakeLLMClient:
         self.delay = delay
         self.result = result or LLMResult(text="ok")
         self.calls: list[tuple[str, str]] = []
+        self.probe_calls = 0
 
     def chat_sync(self, system_prompt: str, user_prompt: str, max_tokens: int | None = None) -> LLMResult:
         self.calls.append((system_prompt, user_prompt))
@@ -30,6 +31,20 @@ class FakeLLMClient:
 
     def _chat_raw(self, messages, purpose, max_tokens=None, timeout=None):  # noqa: ANN001
         return self.result
+
+    def probe_sync(self) -> dict:
+        self.probe_calls += 1
+        return {
+            "configured": True,
+            "reachable": True,
+            "base_url": self.base_url,
+            "model": self.model,
+            "api_key_present": bool(self.api_key and self.api_key != "none"),
+            "last_success_at": time.time(),
+            "last_error": None,
+            "last_duration_ms": 12.0,
+            "busy": False,
+        }
 
 
 def _load_scenario(client, ticks: int = 5) -> None:
@@ -41,8 +56,8 @@ def _load_scenario(client, ticks: int = 5) -> None:
 
 def test_llm_config_defaults_point_to_local_llama_cpp():
     assert settings.llm_enabled is True
-    assert settings.llm_base_url == "http://192.168.4.13:8080/v1"
-    assert settings.llm_api_key == "sk-mi-ia-secreta"
+    assert settings.llm_base_url == "http://192.168.4.14:8080/v1"
+    assert settings.llm_api_key == "none"
     assert settings.llm_model == "local"
 
 
@@ -57,10 +72,10 @@ def test_startup_log_redacts_api_key(caplog):
         settings.llm_model,
         settings.llm_timeout_seconds,
         settings.llm_max_tokens,
-        "yes" if settings.llm_api_key else "no",
+        "yes" if settings.llm_api_key_present else "no",
     )
     assert "sk-mi-ia-secreta" not in caplog.text
-    assert "api_key_present=yes" in caplog.text
+    assert "api_key_present=no" in caplog.text
 
 
 def test_query_uses_selected_ui_language(client):
@@ -310,11 +325,25 @@ def test_health_and_status_endpoints_expose_safe_metadata(client):
         health = client.get("/v1/engine/llm/health").json()
         status = client.get("/v1/engine/llm/status").json()
     assert health["configured"] is True
+    assert health["reachable"] is True
     assert health["base_url"] == settings.llm_base_url
-    assert health["api_key_present"] is True
+    assert health["api_key_present"] is False
     assert "api_key" not in health
     assert "queue_length" in status
     assert "current_task_type" in status
+    assert "last_duration_ms" in status
+    assert fake.probe_calls == 1
+
+
+def test_health_endpoint_uses_lightweight_probe_not_generation(client):
+    fake = FakeLLMClient(LLMResult(text="OK"))
+    fake.chat_sync = MagicMock(side_effect=AssertionError("health must not call generation"))
+    reset_llm_orchestrator()
+    with patch("app.engine.llm_orchestrator.get_llm_client", return_value=fake):
+        health = client.get("/v1/engine/llm/health").json()
+    assert health["reachable"] is True
+    assert fake.probe_calls == 1
+    fake.chat_sync.assert_not_called()
 
 
 def test_llm_is_not_used_in_scoring_recommendation_or_coa_generation():
@@ -323,3 +352,11 @@ def test_llm_is_not_used_in_scoring_recommendation_or_coa_generation():
         with open(module.__file__, encoding="utf-8") as handle:
             source = handle.read().lower()
         assert "get_llm_orchestrator" not in source
+
+
+def test_llm_narrative_uses_orchestrator_not_direct_chat_raw():
+    import app.engine.llm_narrative as module
+
+    with open(module.__file__, encoding="utf-8") as handle:
+        source = handle.read()
+    assert "._chat_raw(" not in source

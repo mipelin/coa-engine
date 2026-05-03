@@ -29,6 +29,7 @@ from ..core.schemas import (
     TrackInfo,
 )
 from .fusion import FusedTrack, build_fused_tracks
+from .isr_simulation import simulate_isr_observations
 from .targeting import Target, build_targets
 from .anomaly_detection import detect_anomalies
 from .coa_generation import generate_coas
@@ -133,9 +134,17 @@ def run_canonical_analysis(
 
     features = compute_features(events, context.infrastructure or None)
     anomalies = detect_anomalies(events, features)
+    isr_observations = simulate_isr_observations(
+        tick=context.tick or 0,
+        contacts=context.active_contacts,
+        events=events,
+        infrastructure=context.infrastructure or None,
+        seed=context.scenario_state.seed if context.scenario_state and context.scenario_state.seed is not None else None,
+    )
     fused_tracks = build_fused_tracks(
         events=events,
         contacts=context.active_contacts,
+        observations=isr_observations,
         anomalies=anomalies,
         features=features,
     )
@@ -143,6 +152,7 @@ def run_canonical_analysis(
     fused_tracks = build_fused_tracks(
         events=events,
         contacts=context.active_contacts,
+        observations=isr_observations,
         anomalies=anomalies,
         threats=threats,
         features=features,
@@ -217,16 +227,18 @@ def run_canonical_analysis(
     result.recommendation = recommendation
     result.coa_optimization = coa_optimization
     result.operational_effects = effects
+    result.metadata["isr_observations"] = len(isr_observations)
     if include_tracks:
         result.tracks = build_tracks(events)
     if include_temporal:
         result.temporal = analyze_temporal_patterns(events)
 
     logger.info(
-        "Canonical analysis: source=%s tick=%s events=%d fused_tracks=%d threats=%d targets=%d coas=%d coa_variants=%d recommendation=%s opfx=%.2f",
+        "Canonical analysis: source=%s tick=%s events=%d isr_obs=%d fused_tracks=%d threats=%d targets=%d coas=%d coa_variants=%d recommendation=%s opfx=%.2f",
         context.source,
         context.tick,
         len(events),
+        len(isr_observations),
         len(fused_tracks),
         len(threats),
         len(targets),

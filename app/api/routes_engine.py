@@ -56,7 +56,7 @@ def _serialize_optimization(opt: OptimizationResult | None) -> dict | None:
 
 @router.get("/llm/health")
 async def llm_health():
-    """Test LLM connectivity with a tiny prompt. Never exposes the API key."""
+    """Lightweight LLM reachability probe. Never invokes a generation request."""
     return get_llm_orchestrator().run_health_check()
 
 
@@ -74,6 +74,7 @@ async def llm_status():
             if store.get_latest_event_summary() else None
         ),
         "last_error": status["last_error"],
+        "last_duration_ms": status["last_duration_ms"],
     }
 
 

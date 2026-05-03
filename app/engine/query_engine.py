@@ -449,10 +449,10 @@ def context_to_text(ctx: QueryContext) -> str:
         if active:
             lines.append(f"  Active: {', '.join(active[:6])}")
         lines.append(
-            f"  Detection modifier: {ctx.operational_effects.get('detection_modifier', 1.0):.2f}, "
+            f"  Detection modifier: {ctx.operational_effects.get('threat_detection_modifier', 1.0):.2f}, "
             f"COA success modifier: {ctx.operational_effects.get('coa_success_modifier', 1.0):.2f}, "
-            f"Time modifier: {ctx.operational_effects.get('time_modifier', 1.0):.2f}, "
-            f"Risk modifier: {ctx.operational_effects.get('risk_modifier', 1.0):.2f}"
+            f"Time modifier: {ctx.operational_effects.get('coa_time_modifier', 1.0):.2f}, "
+            f"Risk modifier: {ctx.operational_effects.get('coa_risk_modifier', 1.0):.2f}"
         )
 
     if ctx.fired_stimuli:

@@ -36,7 +36,7 @@ class LLMClient:
 
     def __init__(self) -> None:
         self.base_url = settings.llm_base_url
-        self.api_key = settings.llm_api_key
+        self.api_key = settings.llm_api_key_effective
         self.model = settings.llm_model
         self.timeout = settings.llm_timeout_seconds
         self.enabled = settings.llm_enabled
@@ -60,10 +60,29 @@ class LLMClient:
                 "LLM enabled: url=%s model=%s timeout=%.0fs max_tokens=%d api_key=%s",
                 self.base_url, self.model, self.timeout,
                 settings.llm_max_tokens,
-                "yes" if self.api_key else "no",
+                "yes" if settings.llm_api_key_present else "no",
             )
         else:
             logger.info("LLM disabled — using deterministic fallbacks")
+
+    def _client(self, timeout: float | None = None) -> httpx.Client:
+        return httpx.Client(timeout=timeout or self.timeout)
+
+    def _fetch_models(self, client: httpx.Client | None = None, *, timeout: float | None = None) -> tuple[list[dict], float]:
+        close_client = False
+        started_at = time.monotonic()
+        if client is None:
+            client = self._client(timeout=timeout)
+            close_client = True
+        try:
+            resp = client.get(f"{self.base_url}/models", headers=self._headers())
+            resp.raise_for_status()
+            payload = resp.json()
+            models = payload.get("data", [])
+            return models if isinstance(models, list) else [], (time.monotonic() - started_at) * 1000
+        finally:
+            if close_client:
+                client.close()
 
     def _effective_model(self, client: httpx.Client) -> str:
         if self.model != "local":
@@ -71,9 +90,7 @@ class LLMClient:
         if self._resolved_model:
             return self._resolved_model
         try:
-            resp = client.get(f"{self.base_url}/models", headers=self._headers())
-            resp.raise_for_status()
-            models = resp.json().get("data", [])
+            models, _ = self._fetch_models(client)
             if models and isinstance(models[0], dict) and models[0].get("id"):
                 self._resolved_model = str(models[0]["id"])
                 logger.info("Resolved local LLM model id to %s", self._resolved_model)
@@ -239,28 +256,34 @@ class LLMClient:
             max_tokens=max_tokens,
         )
 
-    async def health_check(self) -> dict:
-        """Test LLM connectivity with a tiny prompt. Never exposes the API key."""
+    def probe_sync(self) -> dict:
+        """Lightweight reachability probe using /models. Never calls the model."""
         result: dict = {
             "configured": self.enabled,
             "base_url": self.base_url,
-            "model": self.model,
+            "model": self._resolved_model or self.model,
             "reachable": False,
+            "api_key_present": settings.llm_api_key_present,
         }
         if not self.enabled:
             result["error"] = "LLM disabled"
             result.update(self.diagnostics())
             return result
 
-        llm_result = self._chat_raw(
-            messages=[{"role": "user", "content": "Reply OK"}],
-            purpose="health",
-            max_tokens=8,
-            timeout=min(self.timeout, 10.0),
-        )
-        result["reachable"] = llm_result.ok
-        if not llm_result.ok:
-            result["error"] = llm_result.fallback_reason
+        try:
+            with self._client(timeout=min(self.timeout, settings.llm_health_timeout_seconds)) as client:
+                models, duration_ms = self._fetch_models(client)
+            if models and isinstance(models[0], dict) and models[0].get("id"):
+                self._resolved_model = str(models[0]["id"])
+            self._last_duration_ms = duration_ms
+            self._last_success_at = time.time()
+            self._last_error = None
+            result["reachable"] = True
+            result["model"] = self._resolved_model or self.model
+        except Exception as exc:
+            self._last_duration_ms = None
+            self._last_error = self._classify_error(exc)
+            result["error"] = self._last_error
         result.update(self.diagnostics())
         return result
 

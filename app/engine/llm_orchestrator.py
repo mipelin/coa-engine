@@ -143,35 +143,14 @@ class LLMOrchestrator:
     def run_health_check(self) -> dict:
         llm = get_llm_client()
         status = self.status()
-        result = {
-            "configured": llm.enabled,
-            "reachable": False,
+        result = llm.probe_sync()
+        result.update({
             "busy": status["busy"],
             "queue_length": status["queue_length"],
-            "last_success_at": status["last_success_at"],
-            "last_error": status["last_error"],
-            "last_duration_ms": status["last_duration_ms"],
-            "base_url": llm.base_url,
-            "model": getattr(llm, "_resolved_model", None) or llm.model,
-            "api_key_present": bool(llm.api_key),
-        }
-        if not llm.enabled:
-            return result
-        task = LLMTask(
-            task_type="health",
-            language="en",
-            prompt_chars=8,
-            runner=lambda: get_llm_client()._chat_raw(
-                messages=[{"role": "user", "content": "Reply OK"}],
-                purpose="health",
-                max_tokens=8,
-                timeout=min(settings.llm_timeout_seconds, settings.llm_health_timeout_seconds),
-            ),
-        )
-        llm_result = self._submit(task, wait=True)
-        result["reachable"] = llm_result.ok
-        if not llm_result.ok:
-            result["last_error"] = llm_result.fallback_reason
+            "last_success_at": result.get("last_success_at") or status["last_success_at"],
+            "last_error": result.get("last_error") or status["last_error"],
+            "last_duration_ms": result.get("last_duration_ms") or status["last_duration_ms"],
+        })
         return result
 
     def enqueue_event_summary(
