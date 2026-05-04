@@ -344,10 +344,18 @@
                         <div id="replay-panel"><div class="empty">No replay data available yet.</div></div>
                     </div>
                     <div class="cop-card">
-                        <div class="cop-card-kicker">After Action Review</div>
-                        <h3>AAR</h3>
-                        <div class="cop-actions"><button id="btn-generate-aar">Generate AAR</button></div>
-                        <div id="aar-output"><div class="empty">Generate AAR after a scenario run.</div></div>
+                        <div class="cop-card-kicker">Operational Reporting</div>
+                        <h3>AAR / Briefing</h3>
+                        <div class="cop-actions">
+                            <select id="report-type" style="background:#1e293b;border:1px solid #334155;color:#d1d5db;padding:5px 8px;border-radius:3px;font-size:11px">
+                                <option value="aar">AAR</option>
+                                <option value="briefing">Briefing</option>
+                                <option value="combined" selected>Combined</option>
+                            </select>
+                            <button id="btn-generate-report">Generate</button>
+                            <button id="btn-report-pdf">Download PDF</button>
+                        </div>
+                        <div id="report-output"><div class="empty">Generate report after a scenario run.</div></div>
                     </div>
                 </div>
                 <div id="scn-meta" class="scn-info"></div>

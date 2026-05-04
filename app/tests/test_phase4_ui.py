@@ -174,7 +174,9 @@ def test_dashboard_exposes_cop_panels_and_demo_mode():
     assert 'id="decision-panel"' in html
     assert 'id="effects-panel"' in html
     assert 'id="replay-panel"' in html
-    assert 'id="aar-output"' in html
+    assert 'id="report-output"' in html
+    assert 'id="report-type"' in html
+    assert 'id="btn-report-pdf"' in html
     assert 'id="demo-mode-run"' in html
     assert 'id="demo-warm-start"' in html
     assert 'id="toggle-fused-tracks"' in html

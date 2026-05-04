@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, Response, WebSocket, WebSocketDisconnect
 
 from ..core.config import settings
 from ..core.schemas import (
@@ -38,6 +38,8 @@ from ..engine.coa_optimizer import OptimizationResult
 from ..engine.cop import assemble_cop, cop_to_dict
 from ..engine.operational_effects import OperationalEffects, compute_operational_effects
 from ..engine.replay import generate_aar, get_replay_store
+from ..engine.reporting_context import build_reporting_context
+from ..engine.report_generator import export_report_pdf, generate_report
 
 router = APIRouter(prefix="/engine", tags=["engine"])
 
@@ -342,6 +344,34 @@ async def after_action_review():
         }
     aar = generate_aar(timeline)
     return {"status": "ok", "aar": aar.to_dict()}
+
+
+@router.get("/report")
+async def operational_report(
+    report_type: str = Query("combined", alias="type"),
+    lang: str | None = None,
+):
+    """Generate AAR, commander briefing, or combined operational report."""
+    language = lang or get_state_store().get_ui_language()
+    return generate_report(mode=report_type, language=language)
+
+
+@router.get("/report/pdf")
+async def operational_report_pdf(
+    report_type: str = Query("combined", alias="type"),
+    lang: str | None = None,
+):
+    """Export AAR, commander briefing, or combined report as NATO-style PDF."""
+    language = lang or get_state_store().get_ui_language()
+    context = build_reporting_context()
+    report = generate_report(mode=report_type, language=language, context=context)
+    content = export_report_pdf(report, context)
+    filename = f"operational_report_{report.get('mode', report_type)}.pdf"
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @router.post("/replay/clear")

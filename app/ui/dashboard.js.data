@@ -24,6 +24,8 @@ const state = {
   operationalEffects: {},
   replaySummary: {},
   aar: null,
+  report: null,
+  reportMode: 'combined',
   assets: [],
   aisContacts: [],
   briefing: null,
@@ -105,6 +107,10 @@ const UI_TEXT = {
   'briefing.pdf_error': 'PDF error',
   'briefing.generated': 'Briefing generated',
   'briefing.error': 'Briefing error',
+  'report.empty': 'Generate report after a scenario run.',
+  'report.generated': 'Operational report generated',
+  'report.error': 'Report error',
+  'report.downloaded': 'Report PDF downloaded',
   'coa.why_won': 'Why This COA Won',
   'coa.friendly_detected': 'Friendly contacts detected:',
   'coa.assets_assignable': 'Assets assignable to top COA:',
@@ -567,12 +573,14 @@ function localizedValue(node, field, fallback = null) {
 
 function clearBriefings() {
   state.briefing = null;
+  state.report = null;
   state.briefingLanguage = document.getElementById('briefing-lang')?.value || state.briefingLanguage || 'en';
   const primaryPdf = document.getElementById('btn-pdf');
   const englishPdf = document.getElementById('btn-pdf-en');
   if (primaryPdf) primaryPdf.style.display = 'none';
   if (englishPdf) englishPdf.style.display = 'none';
   if (document.getElementById('bf-body')) renderBriefing();
+  renderReport();
 }
 
 function setSimStatus(message, kind='ok') {
@@ -1336,24 +1344,25 @@ function renderReplayPanel() {
   `;
 }
 
-function renderAar() {
-  const node = document.getElementById('aar-output');
+function renderReport() {
+  const node = document.getElementById('report-output');
   if (!node) return;
-  const aar = state.aar;
-  if (!aar) {
-    node.innerHTML = '<div class="empty">Generate AAR after a scenario run.</div>';
+  const report = state.report;
+  if (!report) {
+    node.innerHTML = `<div class="empty">${esc(t('report.empty', 'Generate report after a scenario run.'))}</div>`;
     return;
   }
   node.innerHTML = `
     <div class="cop-item">
-      <div class="cop-card-kicker">What happened</div>
-      <p>${esc(aar.situation_summary || '—')}</p>
-      <div class="cop-card-kicker" style="margin-top:8px">What changed</div>
-      <ul>${(aar.threat_evolution || []).slice(-3).map((item) => `<li>${esc(`${item.tick}: ${item.threat_level}`)}</li>`).join('')}</ul>
-      <div class="cop-card-kicker" style="margin-top:8px">What was recommended</div>
-      <ul>${(aar.recommendation_timeline || []).slice(-3).map((item) => `<li>${esc(`${item.tick}: ${item.title || item.coa_id || 'N/A'}`)}</li>`).join('')}</ul>
+      <div class="cop-card-kicker">Mode: ${esc(report.mode || state.reportMode)}</div>
+      <div class="cop-item-sub">llm_used=${esc(String(Boolean(report.llm_used)))}${report.fallback_reason ? ` · fallback=${esc(report.fallback_reason)}` : ''}</div>
+      <pre style="white-space:pre-wrap;font-size:11px;line-height:1.45;color:#d1d5db;margin-top:8px">${esc(report.text || '')}</pre>
     </div>
   `;
+}
+
+function renderAar() {
+  renderReport();
 }
 
 function renderDemoMode() {
@@ -2594,14 +2603,38 @@ async function injectPlaybookNow(playKey) {
   await injectUnit();
 }
 
-async function loadAar() {
+async function loadReport() {
   try {
-    const result = await api('/v1/engine/replay/aar');
-    state.aar = result.aar || null;
-    renderAar();
-    logLine(result.status === 'ok' ? 'After-action review generated' : (result.message || 'No replay data available'));
+    const mode = document.getElementById('report-type')?.value || state.reportMode || 'combined';
+    const lang = document.getElementById('briefing-lang')?.value || state.briefingLanguage || state.uiLanguage || 'en';
+    const result = await api(`/v1/engine/report?type=${encodeURIComponent(mode)}&lang=${encodeURIComponent(lang)}`);
+    state.report = result || null;
+    state.reportMode = mode;
+    renderReport();
+    logLine(t('report.generated', 'Operational report generated'));
   } catch (error) {
-    logLine(`AAR error: ${error.message}`);
+    logLine(`${t('report.error', 'Report error')}: ${error.message}`);
+  }
+}
+
+async function downloadReportPDF() {
+  try {
+    const mode = document.getElementById('report-type')?.value || state.reportMode || 'combined';
+    const lang = document.getElementById('briefing-lang')?.value || state.briefingLanguage || state.uiLanguage || 'en';
+    const response = await fetch(`/v1/engine/report/pdf?type=${encodeURIComponent(mode)}&lang=${encodeURIComponent(lang)}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `operational_report_${mode}_${state.scenario || 'scenario'}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    logLine(t('report.downloaded', 'Report PDF downloaded'));
+  } catch (error) {
+    logLine(`${t('briefing.pdf_error', 'PDF error')}: ${error.message}`);
   }
 }
 
@@ -2817,6 +2850,7 @@ async function resetScenarioFromDashboard() {
     state.operationalEffects = {};
     state.replaySummary = {};
     state.aar = null;
+    state.report = null;
     state.anomalies = [];
     state.threats = [];
     clearBriefings();
@@ -3067,7 +3101,11 @@ function bindStaticEvents() {
       await injectPlaybookNow(button.dataset.play);
     });
   });
-  document.getElementById('btn-generate-aar')?.addEventListener('click', loadAar);
+  document.getElementById('btn-generate-report')?.addEventListener('click', loadReport);
+  document.getElementById('btn-report-pdf')?.addEventListener('click', downloadReportPDF);
+  document.getElementById('report-type')?.addEventListener('change', (evt) => {
+    state.reportMode = evt.target.value;
+  });
   document.getElementById('demo-mode-run')?.addEventListener('click', runDemoScenarioMode);
   document.getElementById('demo-mode-clear')?.addEventListener('click', clearDemoMode);
   document.getElementById('btn-llm-test')?.addEventListener('click', async () => {
