@@ -43,7 +43,7 @@ ACTION_TEMPLATE_MAP = {
     "monitor": "COA-TPL-BASELINE",
     "track": "COA-TPL-ISR",
     "shadow": "COA-TPL-SHADOW",
-    "intercept-ready": "COA-TPL-COMBINED",
+    "prepared_for_intercept_monitoring": "COA-TPL-COMBINED",
     "protect-asset": "COA-TPL-CABLE-PROTECT",
 }
 
@@ -51,7 +51,7 @@ ACTION_ESCALATION_RISK = {
     "monitor": 0.05,
     "track": 0.08,
     "shadow": 0.16,
-    "intercept-ready": 0.22,
+    "prepared_for_intercept_monitoring": 0.22,
     "protect-asset": 0.14,
 }
 
@@ -339,7 +339,7 @@ def _recommended_action(
     )
     if min_distance < 15.0 or heading_to_asset > 0.45 or "targeting_infrastructure" in suspicious_flags:
         return "protect-asset"
-    return "intercept-ready"
+    return "prepared_for_intercept_monitoring"
 
 
 def _evaluate_target_roe(
@@ -467,7 +467,8 @@ def _rationale(
     fused_track: FusedTrack | None,
 ) -> str:
     reasons: list[str] = []
-    priority_reason = f"Priority {priority_level}; advisory action is {recommended_action}"
+    advisory_action = recommended_action.replace("_", " ")
+    priority_reason = f"Priority {priority_level}; advisory action is {advisory_action}"
     if fused_track is not None:
         reasons.append(fused_track.rationale)
     if threat is not None and threat.main_drivers:

@@ -25,7 +25,7 @@ _SCENARIO_MODES = {"civilian_traffic", "mixed_traffic", "high_threat_environment
 from .geo_validation import (
     is_on_land, is_at_sea, is_offshore,
     random_water_point, random_land_point, random_offshore_point,
-    validate_movement as geo_validate_movement,
+    validate_movement as geo_validate_movement, clamp_wgs84,
     BALTIC_BOUNDS as GEO_BALTIC_BOUNDS,
 )
 
@@ -729,8 +729,8 @@ class CombatContactGenerator:
             timestamp=timestamp,
             source="combat_system",
             contact_type=contact_type,
-            lat=round(track.lat, 4),
-            lon=round(track.lon, 4),
+            lat=round(clamp_wgs84(track.lat, track.lon)[0], 4),
+            lon=round(clamp_wgs84(track.lat, track.lon)[1], 4),
             speed=round(track.speed, 1),
             heading=round(track.heading % 360, 1),
             confidence=track.confidence,

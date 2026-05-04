@@ -190,7 +190,7 @@ def test_high_threat_target_gets_safe_high_priority_action_and_roe():
 
     assert hot.type == "vessel"
     assert hot.priority_level in {"HIGH", "CRITICAL"}
-    assert hot.recommended_action in {"shadow", "protect-asset", "intercept-ready"}
+    assert hot.recommended_action in {"shadow", "protect-asset", "prepared_for_intercept_monitoring"}
     assert hot.roe_status in {"allowed", "restricted", "requires_authorization", "rejected"}
     assert "behavior" in hot.sources
     assert "anomaly" in hot.sources

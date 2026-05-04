@@ -185,7 +185,7 @@ def test_dashboard_auto_falls_back_to_raw_contacts_until_fusion_exists():
     html = build_dashboard_html()
     assert "state.showRawContacts = true;" in html
     assert "state.autoRawContactsFallback = true;" in html
-    assert "No fused tracks yet. Raw contacts are shown until fusion initializes." in html
+    assert "No fused tracks yet. Sensor contacts (AIS / CMS / ISR) are shown until fusion initializes." in html
 
 
 def test_dashboard_demo_mode_queues_briefing_without_blocking():

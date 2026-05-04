@@ -9,16 +9,16 @@ A working prototype of an AI-assisted Course of Action (COA) analysis engine for
 - Produces synthetic multi-source observations and deterministic fusion for a unified operational picture
 - Detects anomalies, assesses threats, and generates explainable threat probabilities per entity
 - Generates advisory targeting support with deterministic supporting-asset suggestions
-- Generates ROE-constrained recommendations, simulates outcomes with Monte Carlo methods, scores and ranks them
+- Generates ROE-constrained recommendations, estimates outcomes with deterministic parametric methods, scores and ranks them
 - Evaluates Rules of Engagement (ROE) per COA — restricted actions are flagged, rejected actions are excluded
 - Produces commander-style briefings with LLM explanation-only enrichment
 - Accepts natural-language queries about current state, with deterministic fallbacks when no LLM is available
-- Provides "what-if" forecasting grounded in simulation — the LLM may rephrase forecasts but never invents them
+- Provides "what-if" forecasting grounded in deterministic parametric estimation — the LLM may rephrase forecasts but never invents them
 - Serves an operational dashboard with live map, contact tracking, COA ranking, and NL query interface
 
 ## What This System Does NOT Do
 
-- **No autonomous targeting or lethal engagement** — advisory outputs only
+- **No autonomous decision-making for targeting or use of force** — advisory outputs only
 - **No command execution** — all recommendations require human approval
 - **No classified data** — all data is synthetic and open-source
 - **No real NATO integrations** — MSS-compatible prototype with clear API boundaries
@@ -42,12 +42,21 @@ Then open:
 - **API docs**: http://localhost:8002/docs
 
 The FastAPI dashboard is the only supported operator UI for this prototype.
+The Streamlit UI remains in the repository as a legacy/optional interface and is not used in the demo flow.
 
 For LLM-enhanced briefings and narratives, create a `.env` file (see `.env.example`).
 
 ## LLM Configuration (llama.cpp)
 
-The engine uses an OpenAI-compatible endpoint (llama.cpp server). Set these in `.env`:
+The engine uses an OpenAI-compatible endpoint (llama.cpp server). The LLM is enabled by default, but it is used only for explanation:
+
+- Ask / natural-language answers
+- commander briefings
+- event summaries
+
+The decision pipeline remains fully deterministic without the LLM. If the LLM is disabled or unreachable, the system continues to operate correctly with deterministic fallbacks. For demo use, verify the local LLM endpoint before presenting.
+
+Set these in `.env`:
 
 ```bash
 COA_LLM_ENABLED=true
@@ -56,7 +65,7 @@ COA_LLM_API_KEY=                                 # optional — leave empty for 
 COA_LLM_MODEL=local                              # model name the server expects
 ```
 
-When `COA_LLM_ENABLED=false` (or when the server is unreachable), all features fall back to deterministic answers — the engine works fully without an LLM.
+When `COA_LLM_ENABLED=false` (or when the server is unreachable), explanation features fall back to deterministic answers. Decision support remains available because the analysis pipeline, deterministic fusion, advisory targeting support, ROE-constrained recommendations, forecasting, COP, and replay logic do not depend on the LLM.
 
 **Test the llama.cpp server with curl:**
 
@@ -70,7 +79,7 @@ curl http://192.168.4.14:8080/v1/chat/completions \
   }'
 ```
 
-A successful response returns JSON with `choices[0].message.content`. A connection error means the server is not running or the URL is wrong — the engine will log a warning and use deterministic fallbacks.
+A successful response returns JSON with `choices[0].message.content`. A connection error means the server is not running or the URL is wrong — the engine will log a warning and use deterministic fallbacks. For demo stability, confirm the local LLM is reachable before relying on Ask, briefing, or summary narration.
 
 ## Architecture
 
@@ -109,7 +118,7 @@ coa_engine/
       coa_generation.py         # Template-based advisory COA generation
       coa_templates.py          # COA template definitions and selection logic
       coa_validation.py         # Asset feasibility and spatial validation
-      simulation.py             # Monte Carlo simulation (seeded, deterministic)
+      simulation.py             # Deterministic parametric outcome estimation (seeded)
       scoring.py                # Weighted multi-criteria COA scoring
       recommendation.py         # Top-COA selection with rationale and alternatives
       portfolio.py              # Multi-COA portfolio (combined packages)
@@ -191,7 +200,7 @@ MSS posture:
 |--------|------|-------------|
 | POST | `/analysis/run` | Run full analysis pipeline on loaded events |
 | POST | `/coa/generate` | Generate advisory COAs |
-| POST | `/coa/simulation/run` | Monte Carlo simulation for each COA |
+| POST | `/coa/simulation/run` | Deterministic parametric outcome estimation for each COA |
 | POST | `/coa/recommendation/run` | Score and recommend top COA |
 | POST | `/coa/briefing/generate` | Generate commander briefing |
 | POST | `/coa/briefing/export/json` | Export briefing as JSON |
@@ -199,21 +208,22 @@ MSS posture:
 
 ## Safety Boundaries
 
-- **Guardrails**: The query engine refuses questions about lethal targeting, engagement authorization, and ROE bypass. These are checked before any processing.
+- **Guardrails**: The query engine refuses questions about lethal targeting, force-approval requests, and ROE bypass. These are checked before any processing.
 - **LLM is explanation-only**: The LLM may rephrase answers and enrich narratives, but it never generates forecasts, selects COAs, or modifies engine state.
 - **Targeting is advisory-only**: Target prioritization and supporting-asset assignment never authorize engagement or weapon release.
-- **Fusion is deterministic**: The system uses synthetic multi-source observations with deterministic fusion. It does not claim real raw ISR processing.
-- **Forecasting is simulation-based**: What-if forecasts are produced by cloning and running the simulation forward. The LLM may rephrase the output but cannot invent outcomes.
+- **Fusion is deterministic**: The system uses synthetic multi-source observations with proximity-based contact correlation (not sensor-level data fusion with uncertainty propagation). It does not claim live ISR ingestion or analysis.
+- **Forecasting is estimation-based**: What-if forecasts are produced by cloning and running the deterministic parametric estimation forward. The LLM may rephrase the output but cannot invent outcomes.
 - **ROE enforcement**: Every COA is evaluated against ROE rules. Restricted COAs are flagged with reasons; rejected COAs are excluded from recommendation.
 - **No state mutation from queries**: Natural-language queries and forecasts never modify engine state.
 
 ## Known Limitations
 
 - Rule-based anomaly detection only (no ML model trained on real data — by design)
-- Simulation uses simplified probability models, not high-fidelity wargaming
+- Parametric estimation uses simplified probability models, not high-fidelity wargaming
 - Single-user prototype; no authentication or multi-user support
-- In-memory state store (SQLite persistence available but not enabled by default)
+- SQLite persistence is enabled by default using SQLite local state and replay storage
 - No real external integrations in default configuration (AIS/NOAA replay available when configured)
+- Streamlit UI remains available as a legacy/optional interface and is not used in the demo
 
 ## Test Status
 

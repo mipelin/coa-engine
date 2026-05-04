@@ -238,6 +238,11 @@ class ValidationResult:
     snapped_lon: float | None = None
 
 
+def clamp_wgs84(lat: float, lon: float) -> tuple[float, float]:
+    """Clamp coordinates to valid WGS84 bounds."""
+    return max(-90.0, min(90.0, lat)), max(-180.0, min(180.0, lon))
+
+
 def validate_placement(lat: float, lon: float, entity_type: str) -> ValidationResult:
     """Validate that a position is appropriate for the entity type.
 

@@ -14,6 +14,8 @@ import random
 from dataclasses import dataclass, field
 from typing import Any
 
+from .geo_validation import clamp_wgs84
+
 logger = logging.getLogger("coa_engine.engine.scenario_generator")
 
 
@@ -304,6 +306,7 @@ class ScenarioGenerator:
             for ent in template.entities:
                 ent.lat += rng.uniform(-jitter, jitter)
                 ent.lon += rng.uniform(-jitter, jitter)
+                ent.lat, ent.lon = clamp_wgs84(ent.lat, ent.lon)
 
         return template
 

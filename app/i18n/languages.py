@@ -41,4 +41,4 @@ def resolve_language(language: str | None) -> tuple[str, str]:
 
 def final_language_instruction(language: str | None) -> str:
     _, language_name = resolve_language(language)
-    return f"You must respond in {language_name}. Do not switch language."
+    return f"Respond ONLY in {language_name}. Do not switch languages."

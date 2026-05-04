@@ -28,10 +28,10 @@ from app.engine.operational_effects import (
     OperationalEffects,
     apply_effects_to_features,
     apply_effects_to_feasibility,
-    apply_effects_to_simulation,
     compute_operational_effects,
     infer_jamming_intensity,
 )
+from app.engine.simulation import run_simulations
 
 
 # ---------------------------------------------------------------------------
@@ -296,47 +296,6 @@ class TestApplyToFeatures:
 
 
 # ---------------------------------------------------------------------------
-# Simulation application
-# ---------------------------------------------------------------------------
-
-
-class TestApplyToSimulation:
-    def test_default_conditions_no_change(self):
-        coa = _coa()
-        sim = _sim()
-        effects = compute_operational_effects({})
-        result = apply_effects_to_simulation(coa, sim, effects)
-        assert result.success_probability == sim.success_probability
-
-    def test_harsh_conditions_reduce_success(self):
-        coa = _coa()
-        sim = _sim()
-        effects = compute_operational_effects(
-            {"sea_state": 8, "visibility": "fog", "weather": "storm"},
-            jamming_intensity="high",
-        )
-        result = apply_effects_to_simulation(coa, sim, effects)
-        assert result.success_probability < sim.success_probability
-        assert result.expected_time_to_effect > sim.expected_time_to_effect
-        assert result.risk_to_second_cable > sim.risk_to_second_cable
-        assert result.escalation_probability > sim.escalation_probability
-        assert result.missed_detection_probability > sim.missed_detection_probability
-
-    def test_clamping(self):
-        coa = _coa()
-        sim = _sim()
-        effects = compute_operational_effects(
-            {"sea_state": 9, "visibility": "fog", "weather": "storm"},
-            jamming_intensity="severe",
-            readiness="critical",
-        )
-        result = apply_effects_to_simulation(coa, sim, effects)
-        assert 0.01 <= result.success_probability <= 0.98
-        assert 0.01 <= result.risk_to_second_cable <= 0.95
-        assert 0.01 <= result.escalation_probability <= 0.95
-
-
-# ---------------------------------------------------------------------------
 # Feasibility application
 # ---------------------------------------------------------------------------
 
@@ -467,6 +426,21 @@ class TestPipelineIntegration:
         r1 = run_canonical_analysis(ctx)
         r2 = run_canonical_analysis(ctx)
         assert r1.operational_effects.to_dict() == r2.operational_effects.to_dict()
+
+    def test_analysis_does_not_apply_operational_effects_twice_to_simulation(self):
+        events = [_event(), _event(entity_id="E2")]
+        from app.core.schemas import ScenarioState
+
+        scenario = ScenarioState(
+            scenario_id="harsh",
+            environment={"sea_state": 8, "visibility": "fog", "weather": "storm"},
+        )
+        ctx = AnalysisContext(events=events, scenario_state=scenario, source="test", tick=1)
+        result = run_canonical_analysis(ctx)
+        baseline_simulations = run_simulations(result.coas, events, result.threats, scenario)
+        assert [sim.model_dump(mode="json") for sim in result.simulations] == [
+            sim.model_dump(mode="json") for sim in baseline_simulations
+        ]
 
 
 # ---------------------------------------------------------------------------

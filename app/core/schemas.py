@@ -16,8 +16,8 @@ class OperationalEvent(BaseModel):
     event_type: EventType
     source: str
     confidence: float = Field(ge=0.0, le=1.0)
-    lat: float
-    lon: float
+    lat: float = Field(ge=-90.0, le=90.0)
+    lon: float = Field(ge=-180.0, le=180.0)
     entity_id: str
     entity_type: EntityType
     description: str
@@ -178,6 +178,9 @@ class ScoredCOAPackage(BaseModel):
 
 
 class Recommendation(BaseModel):
+    status: str = "ok"
+    message: str | None = None
+    reason: str | None = None
     recommended: ScoredCOA | None
     alternatives: list[ScoredCOA]
     recommended_package: ScoredCOAPackage | None = None
@@ -207,6 +210,7 @@ class Briefing(BaseModel):
     llm_used: bool = False
     llm_enriched: bool = False
     fallback_reason: str | None = None
+    narrative_text: str | None = None
 
 
 class AnalysisRequest(BaseModel):
@@ -262,8 +266,8 @@ class Contact(BaseModel):
     timestamp: datetime
     source: str
     contact_type: ContactType
-    lat: float
-    lon: float
+    lat: float = Field(ge=-90.0, le=90.0)
+    lon: float = Field(ge=-180.0, le=180.0)
     speed: float = 0.0
     heading: float = 0.0
     confidence: float = Field(default=0.8, ge=0.0, le=1.0)
@@ -280,8 +284,8 @@ class ContactUpdateRequest(BaseModel):
     name: str | None = None
     contact_type: ContactType | None = None
     is_hostile: bool | None = None
-    lat: float | None = None
-    lon: float | None = None
+    lat: float | None = Field(default=None, ge=-90.0, le=90.0)
+    lon: float | None = Field(default=None, ge=-180.0, le=180.0)
     speed: float | None = None
     heading: float | None = None
     attributes: dict[str, Any] | None = None
@@ -298,8 +302,8 @@ class CombatContactInjectRequest(BaseModel):
     subtype: str | None = None
     suspicious: bool = False
     allegiance: str | None = None
-    lat: float | None = None
-    lon: float | None = None
+    lat: float | None = Field(default=None, ge=-90.0, le=90.0)
+    lon: float | None = Field(default=None, ge=-180.0, le=180.0)
     heading: float | None = None
     speed: float | None = None
     altitude_ft: float | None = None
@@ -313,8 +317,8 @@ class EngineActionRequest(BaseModel):
     entity_id: str | None = None
     action: str
     execute_tick: int | None = None
-    lat: float | None = None
-    lon: float | None = None
+    lat: float | None = Field(default=None, ge=-90.0, le=90.0)
+    lon: float | None = Field(default=None, ge=-180.0, le=180.0)
     new_heading: float | None = None
     new_speed: float | None = None
     radius_nm: float | None = None

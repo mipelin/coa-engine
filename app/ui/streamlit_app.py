@@ -895,9 +895,9 @@ def main():
 
     # ---- Simulation ----
     with tab_sim:
-        st.header("Monte Carlo Simulation Results")
+        st.header("Parametric Outcome Estimation Results")
         st.caption(
-            f"Based on {sims[0].simulation_runs if sims else 0} runs per COA. Not predictions."
+            f"Based on {sims[0].simulation_runs if sims else 0} deterministic estimation iterations per COA. Not predictions."
         )
         if sims:
             sim_labels = [s.coa_id for s in sims]

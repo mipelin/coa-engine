@@ -134,8 +134,8 @@ def test_query_question_language_overrides_ui_hint(client):
             "ui_language_hint": "es",
         })
     assert resp.status_code == 200
-    assert resp.json()["detected_language"] == "en"
-    assert "English" in fake.calls[0][0]
+    assert resp.json()["detected_language"] == "es"
+    assert "Respond ONLY in Spanish" in fake.calls[0][0]
 
 
 def test_briefing_request_does_not_overwrite_ui_language_for_event_summaries(client):
@@ -148,6 +148,18 @@ def test_briefing_request_does_not_overwrite_ui_language_for_event_summaries(cli
     assert resp.status_code == 200
     assert resp.json()["briefing"]["language_used"] == "it"
     assert get_state_store().get_ui_language() == "es"
+
+
+def test_briefing_defaults_to_selected_ui_language_when_lang_missing(client):
+    _load_scenario(client)
+    fake = FakeLLMClient(LLMResult(text='{"situation":"Situacion","what_changed":["Cambio"],"recent_developments":["Cambio reciente"],"assessment":"Evaluacion","key_actors":["Actor"],"recommended_coa":"COA","roe_status":"allowed","risks":["Riesgo"],"assumptions":["Supuesto"],"confidence":"MEDIUM"}'))
+    reset_llm_orchestrator()
+    with patch("app.engine.llm_orchestrator.get_llm_client", return_value=fake):
+        client.post("/v1/engine/ui-language", json={"language": "es"})
+        resp = client.get("/v1/engine/briefing")
+    assert resp.status_code == 200
+    assert resp.json()["briefing"]["language_used"] == "es"
+    assert "Respond ONLY in Spanish" in fake.calls[0][0]
 
 
 def test_briefing_multiple_requests_regenerate_with_current_state(client):
@@ -182,6 +194,41 @@ def test_query_fallback_reason_is_exposed(client):
     data = resp.json()
     assert data["llm_used"] is False
     assert data["fallback_reason"] == "llm_connection_failed"
+
+
+def test_query_llm_state_mismatch_falls_back_deterministically(client):
+    _load_scenario(client)
+    fake = FakeLLMClient(LLMResult(text="Threat level LOW. COA-BOGUS should be selected."))
+    reset_llm_orchestrator()
+    with patch("app.engine.llm_orchestrator.get_llm_client", return_value=fake):
+        resp = client.post("/v1/engine/query", json={"question": "What is the current threat level?"})
+    data = resp.json()
+    assert data["llm_used"] is False
+    assert data["fallback_reason"] == "llm_state_mismatch"
+
+
+def test_query_prompt_includes_structured_data_guardrails(client):
+    _load_scenario(client)
+    fake = FakeLLMClient(LLMResult(text="Based on the current system state, threat level is HIGH."))
+    reset_llm_orchestrator()
+    with patch("app.engine.llm_orchestrator.get_llm_client", return_value=fake):
+        client.post("/v1/engine/query", json={"question": "What changed recently?"})
+    system_prompt = fake.calls[0][0]
+    assert "Use ONLY the provided structured data" in system_prompt
+    assert 'The system recommends' in system_prompt
+
+
+def test_briefing_llm_state_mismatch_keeps_narrative(client):
+    _load_scenario(client)
+    fake = FakeLLMClient(LLMResult(text='{"situation":"Threat level LOW with COA-BOGUS","what_changed":["Unknown target CMS-BOGUS-1"],"recent_developments":["Unknown target"],"assessment":"Low threat","key_actors":["CMS-BOGUS-1"],"recommended_coa":"COA-BOGUS","roe_status":"allowed","risks":["None"],"assumptions":["None"],"confidence":"LOW"}'))
+    reset_llm_orchestrator()
+    with patch("app.engine.llm_orchestrator.get_llm_client", return_value=fake):
+        resp = client.get("/v1/engine/briefing", params={"lang": "en"})
+    briefing = resp.json()["briefing"]
+    assert briefing["llm_used"] is True
+    assert briefing["llm_enriched"] is False
+    assert briefing["fallback_reason"] == "llm_state_mismatch"
+    assert briefing["narrative_text"] is not None
 
 
 def test_unsafe_query_is_refused_without_llm(client):
@@ -294,6 +341,55 @@ def test_event_summary_task_updates_latest_summary(client):
     assert latest is not None
     assert latest["summary_text"] == "Cable event summary"
     assert latest["language_used"] == "es"
+    assert "Respond ONLY in Spanish" in fake.calls[0][0]
+
+
+def test_event_summary_uses_selected_italian_ui_language(client):
+    _load_scenario(client, ticks=3)
+    fake = FakeLLMClient(LLMResult(text="Riepilogo evento"))
+    reset_llm_orchestrator()
+    with patch("app.engine.llm_orchestrator.get_llm_client", return_value=fake):
+        client.post("/v1/engine/ui-language", json={"language": "it"})
+        resp = client.post("/v1/engine/inject", json={
+            "contacts": [{
+                "contact_id": "JAM-IT-1",
+                "timestamp": "2026-05-02T00:00:00Z",
+                "source": "test",
+                "contact_type": "jamming",
+                "lat": 57.5,
+                "lon": 19.0,
+                "speed": 0.0,
+                "heading": 0.0,
+                "confidence": 0.9,
+                "entity_id": "JAM-IT-1",
+                "is_hostile": True,
+                "attributes": {"description": "Jamming detected"},
+            }]
+        })
+        assert resp.status_code == 200
+        for _ in range(20):
+            summary = get_state_store().get_latest_event_summary()
+            if summary and summary.summary_text:
+                break
+            time.sleep(0.05)
+    latest = client.get("/v1/engine/event-summary/latest").json()["summary"]
+    assert latest is not None
+    assert latest["language_used"] == "it"
+    assert "Respond ONLY in Italian" in fake.calls[0][0]
+
+
+def test_query_uses_selected_italian_ui_language_even_with_english_question(client):
+    _load_scenario(client)
+    fake = FakeLLMClient(LLMResult(text="Risposta italiana"))
+    reset_llm_orchestrator()
+    with patch("app.engine.llm_orchestrator.get_llm_client", return_value=fake):
+        resp = client.post("/v1/engine/query", json={
+            "question": "What changed recently?",
+            "ui_language_hint": "it",
+        })
+    assert resp.status_code == 200
+    assert resp.json()["detected_language"] == "it"
+    assert "Respond ONLY in Italian" in fake.calls[0][0]
 
 
 def test_event_summary_does_not_change_decision_state(client):

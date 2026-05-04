@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 
+from .llm_guardrails import LLM_DATA_GUARDRAILS, explanation_references_match, sanitize_llm_text
 from .llm_client import LLMResult
 from .llm_orchestrator import get_llm_orchestrator
 from ..core.schemas import OperationalEvent, ThreatResult
@@ -13,24 +14,70 @@ logger = logging.getLogger("coa_engine.engine.llm_narrative")
 SYSTEM_PROMPT_THREAT = """You are an operational intelligence analyst for NATO DIANA.
 Write a concise threat narrative summary in 2-3 paragraphs based on the threat data.
 Use advisory language only: "assessed as", "estimated probability", "indications suggest".
-Never use: target, weapon, strike, engage, kill, lethal, fire, destroy, neutralize."""
+Never use: target, weapon, strike, engage, kill, lethal, fire, destroy, neutralize.
+
+{data_guardrails}
+
+{language_instruction}"""
 
 SYSTEM_PROMPT_BRIEFING_COMPACT = """You are a staff officer producing a commander decision-support briefing for NATO DIANA.
 Based on the structured operational context below, produce a concise commander briefing.
 Focus on implications, patterns, and recommended commander attention areas.
 Use advisory language only. Never use: target, weapon, strike, engage, kill, lethal, fire, destroy, neutralize.
 Keep your response to 3-5 paragraphs maximum.
+If the input mixes languages, keep the response entirely in the requested language.
+
+{data_guardrails}
 
 {language_instruction}"""
 
 SYSTEM_PROMPT_ENTITY = """You are an operational intelligence analyst for NATO DIANA.
 Write a 1-2 sentence risk narrative for a specific entity, explaining why it is assessed as a threat.
 Use advisory language: "estimated", "assessed as", "indicators suggest".
-Never use: target, weapon, strike, engage, kill, lethal, fire, destroy, neutralize."""
+Never use: target, weapon, strike, engage, kill, lethal, fire, destroy, neutralize.
+
+{data_guardrails}
+
+{language_instruction}"""
 
 
-def enrich_threat_narrative(threats: list[ThreatResult], events: list[OperationalEvent]) -> str | None:
+def deterministic_threat_narrative(
+    threats: list[ThreatResult],
+    events: list[OperationalEvent],
+) -> str:
+    if not threats:
+        return "Based on the current system state, no active threat entities are assessed at this time."
+    top = threats[0]
+    event_count = len(events)
+    drivers = ", ".join(top.main_drivers[:3]) or "no dominant drivers recorded"
+    return (
+        f"Based on the current system state, the threat picture is led by {top.entity_id} at "
+        f"{top.threat_probability:.0%} probability with overall level {top.threat_level.value}. "
+        f"Primary indicators are {drivers}. "
+        f"The assessment is drawn from {len(threats)} tracked threat entities across {event_count} current events."
+    )
+
+
+def deterministic_entity_risk_narrative(
+    entity_id: str,
+    threat: ThreatResult,
+) -> str:
+    drivers = ", ".join(threat.main_drivers[:3]) or "recorded indicators"
+    return (
+        f"Based on the current system state, {entity_id} is assessed at {threat.threat_probability:.0%} "
+        f"probability with {threat.threat_level.value} threat level. "
+        f"Key drivers are {drivers}."
+    )
+
+
+def enrich_threat_narrative(
+    threats: list[ThreatResult],
+    events: list[OperationalEvent],
+    *,
+    language: str = "en",
+) -> str | None:
     """LLM produces a natural-language threat summary."""
+    language_code, language_name = resolve_language(language)
     threat_text = "\n".join(
         f"- {t.entity_id}: {t.threat_probability:.0%} ({t.threat_level.value}), "
         f"drivers: {', '.join(t.main_drivers[:3])}"
@@ -40,18 +87,29 @@ def enrich_threat_narrative(threats: list[ThreatResult], events: list[Operationa
 
 {threat_text}
 
-Provide a concise threat narrative summary in English."""
+Provide a concise threat narrative summary in {language_name}."""
 
     result = get_llm_orchestrator().run_chat(
         task_type="threat_narrative",
-        language="en",
-        system_prompt=SYSTEM_PROMPT_THREAT,
+        language=language_code,
+        system_prompt=SYSTEM_PROMPT_THREAT.format(
+            language_instruction=final_language_instruction(language_code),
+            data_guardrails=LLM_DATA_GUARDRAILS,
+        ),
         user_prompt=user_prompt,
         max_tokens=320,
     )
     if result.ok:
-        logger.info("Threat narrative enriched (%d chars)", len(result.text))
-    return result.text
+        text = sanitize_llm_text(result.text)
+        if explanation_references_match(
+            text,
+            threat_level=threats[0].threat_level.value if threats else None,
+            valid_target_ids={t.entity_id for t in threats},
+        ):
+            logger.info("Threat narrative enriched (%d chars)", len(text))
+            return text
+        logger.warning("Threat narrative validation failed; using deterministic fallback")
+    return deterministic_threat_narrative(threats, events)
 
 
 def build_compact_briefing_context(
@@ -89,7 +147,8 @@ def build_compact_briefing_context(
             lines.append(
                 f"  {t.get('entity_id', '?')}: {t.get('level', '?')} "
                 f"({t.get('probability', '?')}), "
-                f"drivers: {', '.join(t.get('drivers', [])[:3])}"
+                f"drivers: {', '.join(t.get('drivers', [])[:3])}, "
+                f"location: {t.get('location', 'Unknown location')}"
             )
 
     if top_coas:
@@ -111,7 +170,8 @@ def build_compact_briefing_context(
             lines.append(
                 f"  {track.get('track_id', '?')}: {track.get('track_type', '?')} / "
                 f"{track.get('primary_entity_id', '?')}, confidence {track.get('fused_confidence', 0):.0%}, "
-                f"sources {track.get('source_count', 0)} ({', '.join(track.get('sources', [])[:4])})"
+                f"sources {track.get('source_count', 0)} ({', '.join(track.get('sources', [])[:4])}), "
+                f"location: {track.get('location', 'Unknown location')}"
             )
             if track.get("rationale"):
                 lines.append(f"      Rationale: {track['rationale']}")
@@ -123,8 +183,9 @@ def build_compact_briefing_context(
                 f"  {target.get('id', target.get('entity_id', '?'))}: "
                 f"{target.get('priority_level', '?')} priority, "
                 f"threat {target.get('threat_score', 0):.2f}, "
-                f"action {target.get('recommended_action', '?')}, "
-                f"ROE {target.get('roe_status', '?')}"
+                f"action {str(target.get('recommended_action', '?')).replace('_', ' ')}, "
+                f"ROE {target.get('roe_status', '?')}, "
+                f"location: {target.get('location', 'Unknown location')}"
             )
             support = target.get("supporting_asset")
             if support:
@@ -213,7 +274,8 @@ def enrich_briefing_compact(
     """Single-pass briefing enrichment. Generates directly in the target language."""
     language_code, _ = resolve_language(language)
     system_prompt = SYSTEM_PROMPT_BRIEFING_COMPACT.format(
-        language_instruction=final_language_instruction(language_code)
+        language_instruction=final_language_instruction(language_code),
+        data_guardrails=LLM_DATA_GUARDRAILS,
     )
     result = get_llm_orchestrator().run_chat(
         task_type="briefing",
@@ -339,8 +401,15 @@ def translate_ui_strings(strings: dict[str, str], language: str) -> dict[str, st
     return result if result else None
 
 
-def entity_risk_narrative(entity_id: str, threat: ThreatResult, events: list[OperationalEvent]) -> str | None:
+def entity_risk_narrative(
+    entity_id: str,
+    threat: ThreatResult,
+    events: list[OperationalEvent],
+    *,
+    language: str = "en",
+) -> str | None:
     """LLM explains risk per entity in plain language."""
+    language_code, language_name = resolve_language(language)
     entity_events = [e for e in events if e.entity_id == entity_id]
     event_summary = "\n".join(
         f"- {e.timestamp.strftime('%HZ')}: {e.event_type.value} — {e.description[:100]}"
@@ -353,15 +422,26 @@ Drivers: {', '.join(t for t in threat.main_drivers)}
 Recent events:
 {event_summary}
 
-Provide a 1-2 sentence risk narrative for this entity in English."""
+Provide a 1-2 sentence risk narrative for this entity in {language_name}."""
 
     result = get_llm_orchestrator().run_chat(
         task_type="entity_risk",
-        language="en",
-        system_prompt=SYSTEM_PROMPT_ENTITY,
+        language=language_code,
+        system_prompt=SYSTEM_PROMPT_ENTITY.format(
+            language_instruction=final_language_instruction(language_code),
+            data_guardrails=LLM_DATA_GUARDRAILS,
+        ),
         user_prompt=user_prompt,
         max_tokens=200,
     )
     if result.ok:
-        logger.info("Entity narrative for %s (%d chars)", entity_id, len(result.text))
-    return result.text
+        text = sanitize_llm_text(result.text)
+        if explanation_references_match(
+            text,
+            threat_level=threat.threat_level.value,
+            valid_target_ids={entity_id},
+        ):
+            logger.info("Entity narrative for %s (%d chars)", entity_id, len(text))
+            return text
+        logger.warning("Entity narrative validation failed for %s; using deterministic fallback", entity_id)
+    return deterministic_entity_risk_narrative(entity_id, threat)

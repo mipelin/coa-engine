@@ -80,6 +80,8 @@ const UI_TEXT = {
   'tick.label': 'Tick',
   'contacts.empty': 'No contacts',
   'coas.empty': 'Awaiting analysis',
+  'coas.no_viable': 'No viable course of action available under current constraints.',
+  'coas.no_viable_reason': 'No assets available or all options are infeasible.',
   'briefing.empty': 'Click Generate Briefing to produce commander assessment',
   'briefing.generating': 'Generating Briefing...',
   'briefing.generate': 'Generate Briefing',
@@ -122,7 +124,7 @@ const UI_TEXT = {
   'coa.dependencies': 'Dependencies:',
   'coa.recommended_bundle': 'Recommended Bundle',
   'query.disclaimer_title': 'Advisory only.',
-  'query.disclaimer_body': 'LLM explains; forecasts are simulation-based. Responses do not authorize decisions or actions.',
+  'query.disclaimer_body': 'LLM explains; forecasts use deterministic parametric estimation. Responses do not authorize decisions or actions.',
   'query.input_placeholder': 'Ask about the current situation, a COA, or a what-if scenario...',
   'query.ask_btn': 'Ask',
   'query.busy': 'Thinking...',
@@ -331,7 +333,7 @@ function renderQueryUi() {
   if (input) input.setAttribute('placeholder', t('query.input_placeholder', 'Ask about the current situation, a COA, or a what-if scenario...'));
   if (button) button.textContent = t('query.ask_btn', 'Ask');
   if (disclaimerTitle) disclaimerTitle.textContent = t('query.disclaimer_title', 'Advisory only.');
-  if (disclaimerBody) disclaimerBody.textContent = t('query.disclaimer_body', 'LLM explains; forecasts are simulation-based. Responses do not authorize decisions or actions.');
+  if (disclaimerBody) disclaimerBody.textContent = t('query.disclaimer_body', 'LLM explains; forecasts use deterministic parametric estimation. Responses do not authorize decisions or actions.');
 
   document.querySelectorAll('.query-chip').forEach((chip) => {
     const labelKey = chip.dataset.i18n;
@@ -901,7 +903,7 @@ function renderContactDetails() {
     ${selectedTarget ? `
     <div class="cd-section">
       <div class="cd-lbl">Targeting advisory</div>
-      <div class="cd-list">Priority ${esc(selectedTarget.priority_level)} · action ${esc(selectedTarget.recommended_action)} · ROE ${esc(selectedTarget.roe_status)}</div>
+      <div class="cd-list">Priority ${esc(selectedTarget.priority_level)} · action ${esc(String(selectedTarget.recommended_action || '').replaceAll('_', ' '))} · ROE ${esc(selectedTarget.roe_status)}</div>
       <div class="cd-list">${esc(selectedTarget.rationale || 'No rationale available.')}</div>
     </div>` : ''}
     ${selectedTrack ? `
@@ -1119,7 +1121,7 @@ function renderFusedTrackList() {
   if (!node) return;
   const tracks = activeFusedTracks();
   if (!tracks.length) {
-    node.innerHTML = '<div class="empty">No fused tracks yet. Raw contacts are shown until fusion initializes.</div>';
+    node.innerHTML = '<div class="empty">No fused tracks yet. Sensor contacts (AIS / CMS / ISR) are shown until fusion initializes.</div>';
     return;
   }
   node.innerHTML = `<div class="cop-list">${tracks.map((track) => {
@@ -1164,7 +1166,7 @@ function renderTargetPanel() {
       <div class="metric-grid" style="margin-top:8px">
         <div class="metric-card"><div class="lbl">Classification</div><div class="val">${esc(target.type)}</div></div>
         <div class="metric-card"><div class="lbl">Threat</div><div class="val">${esc(String(target.threat_score))}</div></div>
-        <div class="metric-card"><div class="lbl">Action</div><div class="val">${esc(target.recommended_action)}</div></div>
+        <div class="metric-card"><div class="lbl">Action</div><div class="val">${esc(String(target.recommended_action || '').replaceAll('_', ' '))}</div></div>
         <div class="metric-card"><div class="lbl">ROE</div><div class="val">${esc(target.roe_status)}</div></div>
       </div>
       <div class="cop-chips">
@@ -1228,8 +1230,19 @@ function renderDecisionPanel() {
   if (!node) return;
   const panel = state.decisionPanel || {};
   const rec = panel.current_recommendation;
+  const recommendationState = state.recommendation || {};
   const variants = panel.optimized_variants || [];
   const forecast = state.forecastSummary || {};
+  if (recommendationState.status === 'no_viable_coa') {
+    node.innerHTML = `
+      <div class="cop-card">
+        <div class="cop-card-kicker">Deterministic recommendation</div>
+        <h3>${esc(t('coas.no_viable', 'No viable course of action available under current constraints.'))}</h3>
+        <div class="cop-item-sub">${esc(recommendationState.reason || t('coas.no_viable_reason', 'No assets available or all options are infeasible.'))}</div>
+      </div>
+    `;
+    return;
+  }
   if (!rec && !variants.length) {
     node.innerHTML = '<div class="empty">Awaiting decision panel</div>';
     return;
@@ -1402,6 +1415,16 @@ function assignableAssetsSummary() {
 }
 
 function recommendationDeltaHtml() {
+  const recommendation = state.recommendation || {};
+  if (recommendation.status === 'no_viable_coa') {
+    return `
+      <div class="coa-insight">
+        <h3>${esc(t('coa.why_won', 'Why This COA Won'))}</h3>
+        <p>${esc(t('coas.no_viable', 'No viable course of action available under current constraints.'))}</p>
+        <p>${esc(recommendation.reason || t('coas.no_viable_reason', 'No assets available or all options are infeasible.'))}</p>
+      </div>
+    `;
+  }
   const winner = state.coas?.[0];
   if (!winner) return '';
   const runnerUp = state.coas?.[1] || null;
@@ -1847,6 +1870,13 @@ function renderCoas() {
   if (tabCount) tabCount.textContent = state.coas.length;
   const container = document.getElementById('co-list');
   if (!container) return;
+  if ((state.recommendation || {}).status === 'no_viable_coa') {
+    container.innerHTML = `
+      ${recommendationDeltaHtml()}
+      <div class="empty">${esc(t('coas.no_viable', 'No viable course of action available under current constraints.'))}</div>
+    `;
+    return;
+  }
   if (!state.coas.length) {
     container.innerHTML = `<div class="empty">${esc(t('coas.empty', 'Awaiting analysis'))}</div>`;
     return;

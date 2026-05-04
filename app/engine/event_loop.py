@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import json
+import re
+import time
 from typing import Any
 
 from ..core.config import settings
@@ -9,7 +11,12 @@ from ..i18n.languages import final_language_instruction, resolve_language
 from ..core.schemas import Recommendation
 from .event_bus import Event, EventKind, get_event_bus
 from .explanation import generate_briefing
-from .llm_narrative import build_compact_briefing_context, enrich_threat_narrative
+from .geo_context import describe_location
+from .llm_guardrails import LLM_DATA_GUARDRAILS, explanation_references_match, sanitize_llm_text
+from .llm_narrative import (
+    build_compact_briefing_context,
+    enrich_threat_narrative,
+)
 from .llm_orchestrator import get_llm_orchestrator
 from .analysis_service import AnalysisContext, run_canonical_analysis
 from .targeting import serialize_targets
@@ -17,6 +24,23 @@ from .replay import capture_snapshot, get_replay_store
 from .state_store import get_state_store
 
 logger = logging.getLogger("coa_engine.engine.event_loop")
+
+
+def _extract_json(text: str) -> str | None:
+    """Extract a JSON object from text that may contain markdown fences or prose."""
+    stripped = text.strip()
+    # Strip markdown code fences
+    m = re.match(r"^```(?:json)?\s*\n?", stripped, re.IGNORECASE)
+    if m:
+        stripped = stripped[m.end():]
+    if stripped.rstrip().endswith("```"):
+        stripped = stripped.rstrip()[:-3].rstrip()
+    # Find first { to last }
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    return stripped[start:end + 1]
 
 
 class EventLoop:
@@ -374,12 +398,17 @@ class EventLoop:
                 "type": latest_event.event_type.value,
                 "entity_id": latest_event.entity_id,
                 "description": latest_event.description,
+                "location": describe_location(latest_event.lat, latest_event.lon),
             } if latest_event else None,
             "threat_level": self._store.state.current_threat_level,
             "top_threat": {
                 "entity_id": top_threat.entity_id,
                 "level": top_threat.threat_level.value,
                 "probability": f"{top_threat.threat_probability:.0%}",
+                "location": describe_location(
+                    next((contact.lat for contact in self._store.get_contacts() if contact.entity_id == top_threat.entity_id), None),
+                    next((contact.lon for contact in self._store.get_contacts() if contact.entity_id == top_threat.entity_id), None),
+                ),
             } if top_threat else None,
             "recommended_coa": recommendation.recommended.coa.title if recommendation.recommended else "None",
             "recommended_roe_status": recommendation.recommended.coa.roe_status if recommendation.recommended else "unknown",
@@ -404,7 +433,11 @@ class EventLoop:
         logger.info("Tick %d: running LLM enrichment", tick)
 
         try:
-            threat_narrative = enrich_threat_narrative(threats, events)
+            threat_narrative = enrich_threat_narrative(
+                threats,
+                events,
+                language=self._store.get_ui_language(),
+            )
             if threat_narrative and rec.recommended:
                 rec = rec.model_copy(update={"threat_narrative": threat_narrative})
                 self._store.update_recommendation(rec)
@@ -413,7 +446,7 @@ class EventLoop:
             logger.warning("LLM enrichment failed: %s", e)
             return False
 
-    def run_full_briefing(self, scenario_name: str = "Operational Area", language: str = "en") -> dict[str, Any]:
+    def run_full_briefing(self, scenario_name: str = "Operational Area", language: str | None = None) -> dict[str, Any]:
         """Generate a full briefing with LLM enrichment — only on explicit request."""
         threats = self._store.get_threats()
         scored = self._store.get_scored_coas()
@@ -444,11 +477,12 @@ class EventLoop:
         if not rec:
             return {"error": "No recommendation available yet"}
 
-        language_code, _ = resolve_language(language)
+        requested_language = language or self._store.get_ui_language()
+        language_code, _ = resolve_language(requested_language)
         language_instruction = final_language_instruction(language_code)
         logger.info(
             "briefing_language: task_type=briefing requested_language=%s resolved_language=%s prompt_language_instruction=%s",
-            language,
+            requested_language,
             language_code,
             language_instruction,
         )
@@ -481,6 +515,10 @@ class EventLoop:
                     "level": t.threat_level.value,
                     "probability": f"{t.threat_probability:.0%}",
                     "drivers": t.main_drivers[:3],
+                    "location": describe_location(
+                        next((contact.lat for contact in self._store.get_contacts() if contact.entity_id == t.entity_id), None),
+                        next((contact.lon for contact in self._store.get_contacts() if contact.entity_id == t.entity_id), None),
+                    ),
                 }
                 for t in threats
             ]
@@ -521,8 +559,26 @@ class EventLoop:
                 active_incidents=self._store.state.scenario.active_incidents,
                 key_risks=briefing.risks,
                 forecast_summary=rec.edge_cases or None,
-                fused_tracks=[track.to_dict() for track in analysis.fused_tracks[:5]],
-                top_targets=serialize_targets(analysis.top_targets),
+                fused_tracks=[
+                    {
+                        **track.to_dict(),
+                        "location": describe_location(
+                            (track.position or {}).get("lat") if isinstance(track.position, dict) else None,
+                            (track.position or {}).get("lon") if isinstance(track.position, dict) else None,
+                        ),
+                    }
+                    for track in analysis.fused_tracks[:5]
+                ],
+                top_targets=[
+                    {
+                        **item,
+                        "location": describe_location(
+                            next((contact.lat for contact in self._store.get_contacts() if contact.entity_id == item.get("id")), None),
+                            next((contact.lon for contact in self._store.get_contacts() if contact.entity_id == item.get("id")), None),
+                        ),
+                    }
+                    for item in serialize_targets(analysis.top_targets)
+                ],
                 operational_effects=analysis.operational_effects.to_dict() if analysis.operational_effects else {},
                 optimization_summary={
                     "best_variant": (
@@ -549,7 +605,8 @@ class EventLoop:
                 "- Do NOT authorize actions\n"
                 "- Do NOT invent facts beyond provided context\n\n"
                 "IMPORTANT:\n"
-                "- You must respond in the requested language\n"
+                f"- {language_instruction}\n"
+                f"- {LLM_DATA_GUARDRAILS}\n"
                 "- Keep tone professional, operational, and concise\n"
                 "- Avoid unnecessary jargon\n"
                 "- Avoid speculation not grounded in provided data\n\n"
@@ -576,9 +633,11 @@ class EventLoop:
                 "- change recommendations\n"
                 "- bypass ROE\n"
                 "- use the LLM as a decision-maker\n\n"
-                "ONLY explain the current system state. "
-                f"{language_instruction}"
+                "ONLY explain the current system state.\n\n"
+                "OUTPUT FORMAT: Return ONLY valid JSON. No markdown. No code fences. "
+                "No extra text before or after the JSON object."
             )
+            llm_started_at = time.monotonic()
             result = get_llm_orchestrator().run_chat(
                 task_type="briefing",
                 language=language_code,
@@ -586,38 +645,127 @@ class EventLoop:
                 user_prompt=f"Structured context:\n{compact}",
                 max_tokens=700,
             )
+            raw_format: str | None = None
             if result.ok:
-                parsed_text = result.text.strip()
-                if "```" in parsed_text:
-                    parsed_text = parsed_text.split("```")[1]
-                    if parsed_text.startswith("json"):
-                        parsed_text = parsed_text[4:]
-                try:
-                    parsed = json.loads(parsed_text)
-                    briefing = briefing.model_copy(update={
+                raw_text = result.text.strip()
+                raw_format = "text"
+                parsed = None
+
+                # Try to extract JSON from the response
+                json_candidate = _extract_json(raw_text)
+                if json_candidate is not None:
+                    try:
+                        parsed = json.loads(json_candidate)
+                        raw_format = "json"
+                    except json.JSONDecodeError:
+                        logger.info("briefing: JSON candidate found but parse failed, treating as prose")
+
+                def _list_field(value: Any, fallback: list[str]) -> list[str]:
+                    if isinstance(value, list):
+                        return [str(item) for item in value]
+                    if isinstance(value, str) and value.strip():
+                        return [value.strip()]
+                    return fallback
+
+                if parsed and isinstance(parsed, dict):
+                    # Structured JSON path
+                    merged_fields = {
                         "situation": parsed.get("situation") or briefing.situation,
-                        "what_changed": parsed.get("what_changed") or briefing.what_changed,
-                        "recent_developments": parsed.get("recent_developments") or briefing.recent_developments,
+                        "what_changed": _list_field(parsed.get("what_changed"), briefing.what_changed),
+                        "recent_developments": _list_field(parsed.get("recent_developments"), briefing.recent_developments),
                         "assessment": parsed.get("assessment") or briefing.assessment,
-                        "key_actors": parsed.get("key_actors") or briefing.key_actors,
+                        "key_actors": _list_field(parsed.get("key_actors"), briefing.key_actors),
                         "recommended_coa": parsed.get("recommended_coa") or briefing.recommended_coa,
                         "roe_status": parsed.get("roe_status") or briefing.roe_status,
-                        "risks": parsed.get("risks") or briefing.risks,
-                        "assumptions": parsed.get("assumptions") or briefing.assumptions,
+                        "risks": _list_field(parsed.get("risks"), briefing.risks),
+                        "assumptions": _list_field(parsed.get("assumptions"), briefing.assumptions),
                         "confidence": parsed.get("confidence") or briefing.confidence,
-                    })
-                    llm_enriched = True
-                    llm_used = True
-                    fallback_reason = None
-                    logger.info("briefing: llm_used=true llm_enriched=true")
-                except json.JSONDecodeError:
-                    fallback_reason = "llm_model_error"
-                    logger.warning("briefing: invalid JSON from LLM")
+                    }
+                    combined_text = " ".join(
+                        [
+                            sanitize_llm_text(merged_fields["situation"]),
+                            sanitize_llm_text(merged_fields["assessment"]),
+                            sanitize_llm_text(merged_fields["recommended_coa"]),
+                            " ".join(sanitize_llm_text(item) for item in merged_fields["what_changed"]),
+                            " ".join(sanitize_llm_text(item) for item in merged_fields["recent_developments"]),
+                            " ".join(sanitize_llm_text(item) for item in merged_fields["risks"]),
+                        ]
+                    )
+                    valid_target_ids = {target.id for target in analysis.top_targets}
+                    valid_coa_ids = {item.coa.coa_id for item in scored}
+                    valid_coa_titles = {item.coa.title for item in scored}
+                    if not explanation_references_match(
+                        combined_text,
+                        threat_level=self._store.state.current_threat_level,
+                        valid_target_ids=valid_target_ids,
+                        valid_coa_ids=valid_coa_ids,
+                        valid_coa_titles=valid_coa_titles,
+                    ):
+                        fallback_reason = "llm_state_mismatch"
+                        logger.warning("briefing: llm_state_mismatch, keeping LLM narrative as prose")
+                        briefing = briefing.model_copy(update={
+                            "narrative_text": sanitize_llm_text(raw_text),
+                        })
+                        llm_used = True
+                        llm_enriched = False
+                    else:
+                        briefing = briefing.model_copy(update={
+                            "situation": sanitize_llm_text(merged_fields["situation"]),
+                            "what_changed": [sanitize_llm_text(item) for item in merged_fields["what_changed"]],
+                            "recent_developments": [sanitize_llm_text(item) for item in merged_fields["recent_developments"]],
+                            "assessment": sanitize_llm_text(merged_fields["assessment"]),
+                            "key_actors": [sanitize_llm_text(item) for item in merged_fields["key_actors"]],
+                            "recommended_coa": sanitize_llm_text(merged_fields["recommended_coa"]),
+                            "roe_status": sanitize_llm_text(merged_fields["roe_status"]) if merged_fields["roe_status"] else briefing.roe_status,
+                            "risks": [sanitize_llm_text(item) for item in merged_fields["risks"]],
+                            "assumptions": [sanitize_llm_text(item) for item in merged_fields["assumptions"]],
+                            "confidence": sanitize_llm_text(merged_fields["confidence"]),
+                            "narrative_text": sanitize_llm_text(raw_text),
+                        })
+                        llm_enriched = True
+                        llm_used = True
+                        fallback_reason = None
+                        logger.info("briefing: llm_used=true llm_enriched=true raw_format=json")
+                else:
+                    # Prose/text path — LLM returned narrative, not JSON
+                    sanitized = sanitize_llm_text(raw_text)
+                    valid_target_ids = {target.id for target in analysis.top_targets}
+                    valid_coa_ids = {item.coa.coa_id for item in scored}
+                    ref_ok = explanation_references_match(
+                        sanitized,
+                        threat_level=self._store.state.current_threat_level,
+                        valid_target_ids=valid_target_ids,
+                        valid_coa_ids=valid_coa_ids,
+                    )
+                    if ref_ok:
+                        briefing = briefing.model_copy(update={
+                            "situation": sanitized[:500] if len(sanitized) > 500 else sanitized,
+                            "assessment": sanitized,
+                            "narrative_text": sanitized,
+                        })
+                        llm_used = True
+                        llm_enriched = True
+                        fallback_reason = "llm_format_recovered"
+                        logger.info("briefing: llm_used=true raw_format=text (prose fallback)")
+                    else:
+                        # Keep LLM text but flag mismatch
+                        briefing = briefing.model_copy(update={
+                            "narrative_text": sanitized,
+                        })
+                        llm_used = True
+                        fallback_reason = "llm_state_mismatch"
+                        logger.warning("briefing: llm_state_mismatch in prose mode, kept narrative_text")
+
+                duration_ms = int((time.monotonic() - llm_started_at) * 1000)
             else:
                 fallback_reason = result.fallback_reason
+                raw_format = None
+                duration_ms = 0
                 logger.warning("briefing: llm_used=false fallback_reason=%s", fallback_reason)
         else:
             logger.info("briefing: llm_enabled=false, using deterministic briefing")
+            raw_format = None
+            duration_ms = 0
 
         briefing = briefing.model_copy(update={
             "llm_used": llm_used,
@@ -632,6 +780,12 @@ class EventLoop:
         return {
             "briefing": briefing.model_dump(mode="json"),
             "llm_calls_total": self._llm_calls,
+            "llm_attempted": _settings.llm_enabled,
+            "llm_used": llm_used,
+            "fallback_reason": fallback_reason,
+            "language": language_code,
+            "raw_format": raw_format,
+            "duration_ms": duration_ms,
         }
 
 

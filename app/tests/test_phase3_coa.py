@@ -601,9 +601,10 @@ def test_recommendation_changes_with_constrained_assets():
         constrained_scored,
         asset_inventory={"isr_uav": 0, "maritime_patrol_asset": 0},
     )
-    assert constrained_rec.recommended is not None
-    assert constrained_rec.recommended.coa.coa_id != "COA-TPL-COMBINED"
-    assert constrained_rec.recommended.coa.feasibility_score == 1.0
+    assert constrained_rec.status == "no_viable_coa"
+    assert constrained_rec.recommended is None
+    assert constrained_rec.message
+    assert constrained_rec.reason
 
 
 def test_recommendation_handles_empty_scored_list():
@@ -612,6 +613,33 @@ def test_recommendation_handles_empty_scored_list():
     assert rec.alternatives == []
     assert rec.recommended_package is None
     assert "No courses of action" in rec.rationale
+
+
+def test_recommendation_returns_no_viable_when_all_feasibility_zero():
+    _, _, scored, _, _ = _run_full()
+    infeasible = [
+        item.model_copy(update={"coa": item.coa.model_copy(update={"feasibility_score": 0.0})})
+        for item in scored
+    ]
+    rec = recommend(infeasible)
+    assert rec.status == "no_viable_coa"
+    assert rec.recommended is None
+    assert rec.message == "No viable course of action available under current constraints"
+
+
+def test_recommendation_endpoint_returns_no_viable_when_no_assets_available():
+    resp = client.post("/v1/coa/recommendation/run", json={
+        "asset_inventory": {
+            "isr_uav": 0,
+            "maritime_patrol_asset": 0,
+            "coast_guard_liaison": 0,
+        }
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "no_viable_coa"
+    assert body["recommended"] is None
+    assert body["message"]
 
 
 def test_portfolio_allocator_rejects_global_asset_overcommitment():

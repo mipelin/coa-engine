@@ -437,47 +437,6 @@ def apply_effects_to_features(
     return modified
 
 
-def apply_effects_to_simulation(
-    coa: Any,
-    sim: Any,
-    effects: OperationalEffects,
-) -> Any:
-    """Apply operational effects to a simulation result for a given COA.
-
-    Adjusts success probability, time, and risk based on conditions.
-    Returns modified SimulationResult.
-    """
-    if effects.overall_effectiveness >= 0.99:
-        return sim
-
-    success = sim.success_probability * effects.coa_success_modifier
-    success = max(0.02, min(0.98, success))
-
-    time = sim.expected_time_to_effect * effects.coa_time_modifier
-    time = max(5.0, time)
-
-    cable_risk = sim.risk_to_second_cable * effects.coa_risk_modifier
-    cable_risk = max(0.01, min(0.95, cable_risk))
-
-    escalation = sim.escalation_probability * effects.coa_risk_modifier
-    escalation = max(0.01, min(0.95, escalation))
-
-    missed = sim.missed_detection_probability
-    missed += effects.detection_penalty + effects.sensor_degradation * 0.15
-    missed = max(0.01, min(0.95, missed))
-
-    ci_low = max(0.01, sim.confidence_interval[0] * effects.coa_success_modifier)
-    ci_high = min(0.99, sim.confidence_interval[1] * effects.coa_success_modifier)
-
-    return sim.model_copy(update={
-        "success_probability": round(success, 3),
-        "expected_time_to_effect": round(time, 1),
-        "risk_to_second_cable": round(cable_risk, 3),
-        "escalation_probability": round(escalation, 3),
-        "missed_detection_probability": round(missed, 3),
-        "confidence_interval": (round(ci_low, 3), round(ci_high, 3)),
-    })
-
 
 def apply_effects_to_feasibility(
     coa: Any,

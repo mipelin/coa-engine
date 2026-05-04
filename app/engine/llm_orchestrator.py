@@ -12,6 +12,7 @@ from typing import Callable
 from ..core.config import settings
 from ..core.schemas import EventSummary
 from ..i18n.languages import final_language_instruction, resolve_language
+from .llm_guardrails import LLM_DATA_GUARDRAILS, explanation_references_match, sanitize_llm_text
 from .llm_client import LLMResult, get_llm_client
 from .state_store import get_state_store
 
@@ -174,7 +175,9 @@ class LLMOrchestrator:
             "Write a short operational situation update based only on the supplied system state. "
             "Do not invent facts. Do not authorize action. Do not change recommendations. "
             "Explain: what happened, why it matters, what could happen next, and what the system currently recommends. "
-            f"{language_instruction}"
+            f"{LLM_DATA_GUARDRAILS} "
+            f"{language_instruction} "
+            "If the input mixes languages, keep the response entirely in the requested language."
         )
         user_prompt = (
             "Structured operational context:\n"
@@ -185,17 +188,49 @@ class LLMOrchestrator:
 
         def _runner() -> LLMResult:
             result = get_llm_client().chat_sync(system_prompt, user_prompt, max_tokens=320)
+            summary_text = ""
+            fallback_reason = result.fallback_reason
+            if result.ok:
+                candidate = sanitize_llm_text(result.text)
+                valid_targets = {
+                    item.get("entity_id")
+                    for item in [context.get("top_threat") or {}, context.get("latest_event") or {}]
+                    if item.get("entity_id")
+                }
+                valid_coa_titles = {
+                    item.get("title")
+                    for item in context.get("top_coas", [])
+                    if item.get("title")
+                }
+                recommendation_title = context.get("recommended_coa")
+                if recommendation_title and recommendation_title != "None":
+                    valid_coa_titles.add(recommendation_title)
+                if explanation_references_match(
+                    candidate,
+                    threat_level=str(context.get("threat_level") or "LOW"),
+                    valid_target_ids=valid_targets,
+                    valid_coa_titles=valid_coa_titles,
+                ):
+                    summary_text = candidate
+                    fallback_reason = None
+                else:
+                    # Keep the LLM text but flag the mismatch — don't discard it
+                    summary_text = candidate
+                    fallback_reason = "llm_state_mismatch"
+                    logger.warning("event_summary: state mismatch, keeping text with warning")
             summary = EventSummary(
                 tick=tick,
                 event_type=event_type,
-                summary_text=result.text if result.ok else "",
+                summary_text=summary_text,
                 timestamp=datetime.now(timezone.utc),
-                llm_used=result.ok,
+                llm_used=bool(summary_text),
                 language_used=language_code,
-                fallback_reason=result.fallback_reason,
+                fallback_reason=fallback_reason,
             )
             get_state_store().set_latest_event_summary(summary)
-            return result
+            if summary_text:
+                return LLMResult(text=summary_text)
+            return LLMResult(fallback_reason=fallback_reason or "llm_model_error")
 
         task = LLMTask(
             task_type="event_summary",

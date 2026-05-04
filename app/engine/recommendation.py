@@ -8,6 +8,37 @@ from .portfolio import build_portfolios
 logger = logging.getLogger("coa_engine.engine.recommendation")
 
 
+def _has_any_available_assets(
+    asset_states: list[AssetState] | None,
+    asset_inventory: dict[str, int] | None,
+) -> bool:
+    if asset_states is not None:
+        if len(asset_states) == 0:
+            return False
+        return any(max(int(asset.quantity_available), 0) > 0 for asset in asset_states)
+    if asset_inventory is not None:
+        if len(asset_inventory) == 0:
+            return False
+        return any(max(int(quantity), 0) > 0 for quantity in asset_inventory.values())
+    return True
+
+
+def _build_no_viable_recommendation(alternatives: list[ScoredCOA] | None = None) -> Recommendation:
+    message = "No viable course of action available under current constraints"
+    reason = "No assets available or all options infeasible"
+    return Recommendation(
+        status="no_viable_coa",
+        message=message,
+        reason=reason,
+        recommended=None,
+        alternatives=alternatives or [],
+        recommended_package=None,
+        alternative_packages=[],
+        rationale=message,
+        edge_cases=reason,
+    )
+
+
 def recommend(
     scored: list[ScoredCOA],
     asset_states: list[AssetState] | None = None,
@@ -23,6 +54,13 @@ def recommend(
             rationale="No courses of action available for assessment.",
             edge_cases="",
         )
+
+    if (
+        all(item.coa.feasibility_score <= 0.0 for item in scored)
+        or not _has_any_available_assets(asset_states, asset_inventory)
+    ):
+        logger.info("Recommendation: no viable COA available")
+        return _build_no_viable_recommendation(scored)
 
     best = scored[0]
     alternatives = scored[1:]

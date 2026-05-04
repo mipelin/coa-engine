@@ -41,7 +41,6 @@ from .operational_effects import (
     OperationalEffects,
     apply_effects_to_features,
     apply_effects_to_feasibility,
-    apply_effects_to_simulation,
     compute_operational_effects,
     infer_jamming_intensity,
 )
@@ -188,11 +187,7 @@ def run_canonical_analysis(
         coas = [apply_effects_to_feasibility(c, effects) for c in coas]
 
     simulations = run_simulations(coas, events, threats, context.scenario_state)
-
-    # Apply to simulation results
-    if effects.overall_effectiveness < 0.99:
-        sim_map = {s.coa_id: s for s in simulations}
-        simulations = [apply_effects_to_simulation(c, sim_map.get(c.coa_id), effects) or sim_map.get(c.coa_id) for c in coas if sim_map.get(c.coa_id)]
+    # Operational effects are applied once before scoring to avoid double-counting.
 
     scored = score_coas(coas, simulations)
 

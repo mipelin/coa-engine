@@ -218,4 +218,5 @@ def test_recommendation_endpoint_accepts_asset_inventory():
     })
     assert resp.status_code == 200
     body = resp.json()
-    assert body["recommended"]["coa"]["coa_id"] != "COA-006"
+    assert body["status"] == "no_viable_coa"
+    assert body["recommended"] is None

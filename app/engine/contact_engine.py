@@ -13,6 +13,7 @@ from .behavior_models import BehaviorContext, make_policy
 from .combat_contact_generator import CombatContactGenerator
 from .contact_enrichment import enrich_contact
 from .event_bus import Event, EventKind, get_event_bus
+from .geo_validation import clamp_wgs84
 from .scenario_generator import ScenarioGenerator, ScenarioTemplate
 from .state_store import get_state_store
 
@@ -67,6 +68,7 @@ class SimulationScenario:
             ent["lat"] = updates.lat
         if updates.lon is not None:
             ent["lon"] = updates.lon
+        ent["lat"], ent["lon"] = clamp_wgs84(float(ent["lat"]), float(ent["lon"]))
         if updates.speed is not None:
             ent["speed"] = updates.speed
         if updates.heading is not None:
@@ -342,6 +344,7 @@ class SimulationScenario:
         dlon = dist_km * math.sin(heading_rad) / (111.0 * math.cos(math.radians(ent["lat"])))
         ent["lat"] = ent["lat"] + dlat
         ent["lon"] = ent["lon"] + dlon
+        ent["lat"], ent["lon"] = clamp_wgs84(float(ent["lat"]), float(ent["lon"]))
         # Clamp to scenario bounds
         if self._bounds:
             ent["lat"] = max(self._bounds["lat_min"], min(self._bounds["lat_max"], ent["lat"]))
@@ -483,6 +486,7 @@ class SimulationScenario:
             ent = self.entities.get(eid, {})
             ent["lat"] = trigger["lat"]
             ent["lon"] = trigger["lon"]
+            ent["lat"], ent["lon"] = clamp_wgs84(float(ent["lat"]), float(ent["lon"]))
             ent["speed"] = self._resolve_numeric(trigger.get("new_speed"), ent.get("speed", 0.0))
             return Contact(
                 contact_id=f"C-{uuid.uuid4().hex[:8]}",

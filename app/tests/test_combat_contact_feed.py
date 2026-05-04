@@ -82,6 +82,7 @@ def test_combat_contacts_enter_analysis_pipeline_and_can_be_filtered(client):
     assert detail["contact"]["entity_id"] == combat_id
     assert any(item["entity_id"] == combat_id for item in analysis["anomalies"])
     assert any(item["entity_id"] == combat_id for item in analysis["threats"])
+    assert any(combat_id in item["correlated_entities"] for item in analysis["fused_tracks"])
 
 
 def test_generator_off_yields_no_combat_contacts_on_tick(client):

@@ -522,14 +522,14 @@ class TestLanguageParameter:
 
     def test_question_language_beats_ui_hint(self, client):
         _load_and_tick(client)
-        # English question, Spanish UI hint — question wins
+        # Selected UI language governs response language
         result = answer_question("What are the current ROEs?", ui_language_hint="es")
-        assert result["detected_language"] == "en"
+        assert result["detected_language"] == "es"
 
     def test_spanish_question_beats_english_ui_hint(self, client):
         _load_and_tick(client)
         result = answer_question("¿Cuáles son las ROEs actuales?", ui_language_hint="en")
-        assert result["detected_language"] == "es"
+        assert result["detected_language"] == "en"
 
     def test_endpoint_accepts_ui_language_hint(self, client):
         _load_and_tick(client)
@@ -539,8 +539,7 @@ class TestLanguageParameter:
         })
         assert resp.status_code == 200
         data = resp.json()
-        # Spanish question beats English UI hint
-        assert data["detected_language"] == "es"
+        assert data["detected_language"] == "en"
 
     def test_endpoint_force_language_field(self, client):
         _load_and_tick(client)

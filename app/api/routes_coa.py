@@ -109,7 +109,7 @@ async def generate_coas_endpoint(request: AnalysisRequest):
 
 @router.post("/simulation/run")
 async def run_simulation(request: AnalysisRequest):
-    """Run Monte Carlo simulation for all generated COAs."""
+    """Run deterministic parametric outcome estimation for all generated COAs."""
     result = _run_full_pipeline(request)
     return {
         "status": "ok",

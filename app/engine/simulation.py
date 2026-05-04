@@ -58,7 +58,7 @@ def run_simulations(
     threats: list[ThreatResult],
     scenario_state: ScenarioState | None = None,
 ) -> list[SimulationResult]:
-    """Run Monte Carlo-style simulation for each COA."""
+    """Run deterministic parametric outcome estimation for each COA."""
     baseline = _scenario_baseline(events, threats, scenario_state)
     results: list[SimulationResult] = []
 

@@ -21,6 +21,8 @@ from typing import Any
 from ..core.config import settings
 from ..i18n.languages import final_language_instruction, resolve_language
 from .forecasting import ForecastResult, forecast_for_coa, is_forecast_question, route_forecast_question
+from .geo_context import describe_location
+from .llm_guardrails import LLM_DATA_GUARDRAILS, explanation_references_match, sanitize_llm_text
 from .llm_client import get_llm_client
 from .llm_orchestrator import get_llm_orchestrator
 from .state_store import get_state_store
@@ -70,6 +72,23 @@ def detect_language(question: str, ui_language_hint: str | None = None, force_la
     if ui_language_hint:
         return resolve_language(ui_language_hint)[0]
     return "en"
+
+
+def resolve_response_language(
+    question: str,
+    ui_language_hint: str | None = None,
+    force_language: str | None = None,
+) -> str:
+    """Resolve the language used for the response.
+
+    Explicit UI or forced language selection governs the response language.
+    Question-language detection is used only when no response language was selected.
+    """
+    if force_language:
+        return resolve_language(force_language)[0]
+    if ui_language_hint:
+        return resolve_language(ui_language_hint)[0]
+    return detect_language(question)
 
 # ---------------------------------------------------------------------------
 # Guardrails
@@ -123,8 +142,10 @@ Rules:
 - You must never generate, select, or modify a Course of Action.
 - If the question asks you to authorize engagement or bypass ROE, refuse.
 - Base all answers on the provided context, not speculation.
+- {data_guardrails}
 - Keep answers concise (2-4 paragraphs max).
 - If the context is insufficient, say so clearly.
+- If the input mixes languages, keep the response entirely in the requested language.
 
 {language_instruction}"""
 
@@ -132,6 +153,8 @@ SYSTEM_PROMPT_ROE = """You are an advisory decision-support analyst for NATO DIA
 Explain the current ROE framework based ONLY on the structured ROE context provided.
 Do not invent ROE rules. Do not authorize any action.
 Explain only what the current system state shows about ROE constraints and COA classifications.
+- {data_guardrails}
+- If the input mixes languages, keep the response entirely in the requested language.
 
 {language_instruction}"""
 
@@ -271,6 +294,7 @@ def build_context() -> QueryContext:
                 "hostile": c.is_hostile,
                 "name": c.attributes.get("name", c.entity_id),
                 "allegiance": c.attributes.get("allegiance", ""),
+                "location": describe_location(c.lat, c.lon),
             }
             for c in contacts
         ],
@@ -304,6 +328,10 @@ def build_context() -> QueryContext:
                 "source_count": ft.source_count,
                 "sources": ft.sources,
                 "rationale": ft.rationale,
+                "location": describe_location(
+                    (ft.position or {}).get("lat") if isinstance(ft.position, dict) else None,
+                    (ft.position or {}).get("lon") if isinstance(ft.position, dict) else None,
+                ),
             }
             for ft in fused_tracks[:8]
         ],
@@ -314,25 +342,32 @@ def build_context() -> QueryContext:
                 "priority_level": target.priority_level,
                 "priority_score": target.priority_score,
                 "threat_score": target.threat_score,
-                "recommended_action": target.recommended_action,
+                "recommended_action": target.recommended_action.replace("_", " "),
                 "roe_status": target.roe_status,
                 "sources": target.sources,
                 "rationale": target.rationale,
                 "supporting_asset": target.supporting_asset.to_dict() if target.supporting_asset else None,
+                "location": describe_location(
+                    next((c.lat for c in contacts if c.entity_id == target.id), None),
+                    next((c.lon for c in contacts if c.entity_id == target.id), None),
+                ),
             }
             for target in top_targets
         ],
         scored_coas=scored_coas_data,
         recommendation=(
             {
-                "coa_id": rec.recommended.coa.coa_id,
-                "title": rec.recommended.coa.title,
-                "score": rec.recommended.total_score,
-                "roe_status": rec.recommended.coa.roe_status,
-                "roe_reason": rec.recommended.coa.roe_reason,
+                "status": rec.status,
+                "message": rec.message,
+                "reason": rec.reason,
+                "coa_id": rec.recommended.coa.coa_id if rec.recommended else None,
+                "title": rec.recommended.coa.title if rec.recommended else None,
+                "score": rec.recommended.total_score if rec.recommended else 0.0,
+                "roe_status": rec.recommended.coa.roe_status if rec.recommended else "unavailable",
+                "roe_reason": rec.recommended.coa.roe_reason if rec.recommended else "",
                 "rationale": rec.rationale,
             }
-            if rec and rec.recommended else None
+            if rec and (rec.recommended or rec.status != "ok") else None
         ),
         optimization=(
             {
@@ -373,10 +408,11 @@ def context_to_text(ctx: QueryContext) -> str:
 
     lines.append(f"\n--- CONTACTS ({len(ctx.contacts)}) ---")
     for c in ctx.contacts[:15]:
-        lines.append(f"  {c['name']} ({c['entity_id']}): {c['type']}, "
-                     f"{'HOSTILE' if c['hostile'] else 'friendly'}, "
-                     f"pos ({c['lat']:.2f}, {c['lon']:.2f}), "
-                     f"spd {c['speed']:.1f} kts, hdg {c['heading']:.0f}")
+            lines.append(f"  {c['name']} ({c['entity_id']}): {c['type']}, "
+                         f"{'HOSTILE' if c['hostile'] else 'friendly'}, "
+                         f"pos ({c['lat']:.2f}, {c['lon']:.2f}), "
+                     f"spd {c['speed']:.1f} kts, hdg {c['heading']:.0f}, "
+                     f"location: {c.get('location', 'Unknown location')}")
 
     if ctx.threats:
         lines.append(f"\n--- THREAT ASSESSMENT ---")
@@ -396,7 +432,7 @@ def context_to_text(ctx: QueryContext) -> str:
             lines.append(
                 f"  {ft['track_id']} ({ft['track_type']} / {ft['primary_entity_id']}): "
                 f"confidence {ft['confidence']:.0%}, sources={ft['source_count']} "
-                f"({', '.join(ft['sources'])})"
+                f"({', '.join(ft['sources'])}), location: {ft.get('location', 'Unknown location')}"
             )
             if ft.get("rationale"):
                 lines.append(f"      Rationale: {ft['rationale']}")
@@ -407,7 +443,7 @@ def context_to_text(ctx: QueryContext) -> str:
             lines.append(
                 f"  {target['entity_id']}: {target['priority_level']} priority, "
                 f"threat {target['threat_score']:.2f}, action {target['recommended_action']}, "
-                f"ROE {target['roe_status']}"
+                f"ROE {target['roe_status']}, location: {target.get('location', 'Unknown location')}"
             )
             if target.get("supporting_asset"):
                 support = target["supporting_asset"]
@@ -430,10 +466,20 @@ def context_to_text(ctx: QueryContext) -> str:
     if ctx.recommendation:
         r = ctx.recommendation
         lines.append(f"\n--- RECOMMENDED COA ---")
-        lines.append(f"  {r['title']} (score {r['score']:.1f}, ROE: {r['roe_status']})")
-        lines.append(f"  Rationale: {r['rationale']}")
-        if r["roe_reason"]:
-            lines.append(f"  ROE reason: {r['roe_reason']}")
+        if r.get("status") == "no_viable_coa":
+            lines.append(f"  Status: {r['status']}")
+            lines.append(f"  Message: {r.get('message') or 'No viable course of action available under current constraints'}")
+            lines.append(f"  Reason: {r.get('reason') or 'No assets available or all options infeasible'}")
+        else:
+            lines.append(f"  {r['title']} (score {r['score']:.1f}, ROE: {r['roe_status']})")
+            lines.append(f"  Rationale: {r['rationale']}")
+            if r["roe_reason"]:
+                lines.append(f"  ROE reason: {r['roe_reason']}")
+            if (
+                any(target.get("priority_level") == "CRITICAL" for target in ctx.top_targets)
+                and float(r.get("score", 0.0)) < 60.0
+            ):
+                lines.append("  Note: Recommendation reflects feasibility constraints, not priority alone.")
 
     if ctx.optimization:
         lines.append(f"\n--- COA OPTIMIZATION ---")
@@ -516,6 +562,50 @@ def _roe_context_to_text(ctx: QueryContext) -> str:
         if r.get("roe_reason"):
             lines.append(f"  Reason: {r['roe_reason']}")
     return "\n".join(lines)
+
+
+def _llm_response_is_consistent(text: str, ctx: QueryContext) -> bool:
+    valid_target_ids = {item["entity_id"] for item in ctx.top_targets if item.get("entity_id")}
+    valid_target_ids.update(contact["entity_id"] for contact in ctx.contacts if contact.get("entity_id"))
+    valid_coa_ids = {item["coa_id"] for item in ctx.scored_coas if item.get("coa_id")}
+    if ctx.recommendation and ctx.recommendation.get("coa_id"):
+        valid_coa_ids.add(ctx.recommendation["coa_id"])
+    valid_coa_titles = {item["title"] for item in ctx.scored_coas if item.get("title")}
+    if ctx.recommendation and ctx.recommendation.get("title"):
+        valid_coa_titles.add(ctx.recommendation["title"])
+    numeric_truth = _build_numeric_ground_truth(ctx)
+    return explanation_references_match(
+        text,
+        threat_level=ctx.threat_level,
+        valid_target_ids=valid_target_ids,
+        valid_coa_ids=valid_coa_ids,
+        valid_coa_titles=valid_coa_titles,
+        numeric_ground_truth=numeric_truth,
+    )
+
+
+def _build_numeric_ground_truth(ctx: QueryContext) -> dict[str, float]:
+    """Extract key numeric values from context for LLM validation."""
+    truth: dict[str, float] = {}
+    if ctx.recommendation and ctx.recommendation.get("score") is not None:
+        truth["score"] = ctx.recommendation["score"]
+    for s in ctx.scored_coas[:3]:
+        for key in ("success_probability", "escalation_probability"):
+            if key in s:
+                try:
+                    truth[key] = float(s[key])
+                except (ValueError, TypeError):
+                    pass
+        break
+    for t in ctx.threats[:3]:
+        for key in ("probability", "confidence"):
+            if key in t:
+                try:
+                    truth["threat_probability"] = float(t[key])
+                except (ValueError, TypeError):
+                    pass
+        break
+    return truth
 
 
 # ---------------------------------------------------------------------------
@@ -646,13 +736,17 @@ def _fallback_answer(question: str, ctx: QueryContext) -> tuple[str, list[str]]:
         sources.append("coas")
         if ctx.recommendation:
             r = ctx.recommendation
-            parts.append(
-                f"The recommended COA is **{r['title']}** (score {r['score']:.1f}, "
-                f"ROE status: {r['roe_status']})."
-            )
-            parts.append(f"Rationale: {r['rationale']}")
-            if r["roe_reason"] and r["roe_status"] != "allowed":
-                parts.append(f"ROE note: {r['roe_reason']}")
+            if r.get("status") == "no_viable_coa":
+                parts.append(r.get("message") or "No viable course of action available under current constraints.")
+                parts.append(r.get("reason") or "No assets available or all options are infeasible.")
+            else:
+                parts.append(
+                    f"The system recommends **{r['title']}** (score {r['score']:.1f}, "
+                    f"ROE status: {r['roe_status']})."
+                )
+                parts.append(f"Rationale: {r['rationale']}")
+                if r["roe_reason"] and r["roe_status"] != "allowed":
+                    parts.append(f"ROE note: {r['roe_reason']}")
         else:
             parts.append("No recommendation has been computed yet.")
 
@@ -729,13 +823,17 @@ def _fallback_answer_es(
         sources.append("coas")
         if ctx.recommendation:
             r = ctx.recommendation
-            parts.append(
-                f"La COA recomendada es **{r['title']}** (puntuación {r['score']:.1f}, "
-                f"estado ROE: {r['roe_status']})."
-            )
-            parts.append(f"Racional: {r['rationale']}")
-            if r["roe_reason"] and r["roe_status"] != "allowed":
-                parts.append(f"Nota ROE: {r['roe_reason']}")
+            if r.get("status") == "no_viable_coa":
+                parts.append(r.get("message") or "No hay un curso de acción viable bajo las restricciones actuales.")
+                parts.append(r.get("reason") or "No hay activos disponibles o todas las opciones son inviables.")
+            else:
+                parts.append(
+                    f"El sistema recomienda **{r['title']}** (puntuación {r['score']:.1f}, "
+                    f"estado ROE: {r['roe_status']})."
+                )
+                parts.append(f"Racional: {r['rationale']}")
+                if r["roe_reason"] and r["roe_status"] != "allowed":
+                    parts.append(f"Nota ROE: {r['roe_reason']}")
         else:
             parts.append("Aún no se ha calculado una recomendación.")
 
@@ -817,8 +915,8 @@ def answer_question(question: str, ui_language_hint: str | None = None, force_la
     Returns dict with: answer, sources_used, llm_used, fallback_reason (if fallback).
     Never modifies engine state.
     """
-    requested_language = force_language or ui_language_hint or "en"
-    lang = detect_language(question, ui_language_hint=ui_language_hint, force_language=force_language)
+    requested_language = force_language or ui_language_hint or "auto"
+    lang = resolve_response_language(question, ui_language_hint=ui_language_hint, force_language=force_language)
     lang_instruction = final_language_instruction(lang)
     logger.info(
         "query_language: task_type=ask requested_language=%s resolved_language=%s prompt_language_instruction=%s",
@@ -856,10 +954,16 @@ def answer_question(question: str, ui_language_hint: str | None = None, force_la
         }
 
     if is_roe:
-        system_prompt = SYSTEM_PROMPT_ROE.format(language_instruction=lang_instruction)
+        system_prompt = SYSTEM_PROMPT_ROE.format(
+            language_instruction=lang_instruction,
+            data_guardrails=LLM_DATA_GUARDRAILS,
+        )
         context_text = _roe_context_to_text(ctx)
     else:
-        system_prompt = SYSTEM_PROMPT_QUERY.format(language_instruction=lang_instruction)
+        system_prompt = SYSTEM_PROMPT_QUERY.format(
+            language_instruction=lang_instruction,
+            data_guardrails=LLM_DATA_GUARDRAILS,
+        )
         context_text = context_to_text(ctx)
 
     user_prompt = f"Operational context:\n{context_text}\n\nOperator question: {question}"
@@ -872,10 +976,21 @@ def answer_question(question: str, ui_language_hint: str | None = None, force_la
         user_prompt=user_prompt,
     )
     if result.ok:
+        text = sanitize_llm_text(result.text)
+        if not _llm_response_is_consistent(text, ctx):
+            logger.warning("query: llm_used=false fallback_reason=llm_state_mismatch")
+            answer, sources = _fallback_answer(question, ctx)
+            return {
+                "answer": answer,
+                "sources_used": sources,
+                "llm_used": False,
+                "fallback_reason": "llm_state_mismatch",
+                "detected_language": lang,
+            }
         sources = ["state", "contacts", "threat_assessment", "coas", "roe", "stimuli"]
         logger.info("query: llm_used=true")
         return {
-            "answer": result.text,
+            "answer": text,
             "sources_used": sources,
             "llm_used": True,
             "detected_language": lang,
@@ -953,7 +1068,10 @@ def _answer_forecast(question: str, lang: str = "en") -> dict[str, Any]:
 
     # Let LLM rephrase the structured forecast
     lang_instruction = final_language_instruction(lang)
-    system_prompt = SYSTEM_PROMPT_QUERY.format(language_instruction=lang_instruction)
+    system_prompt = SYSTEM_PROMPT_QUERY.format(
+        language_instruction=lang_instruction,
+        data_guardrails=LLM_DATA_GUARDRAILS,
+    )
 
     ctx = build_context()
     context_text = context_to_text(ctx)
@@ -973,8 +1091,18 @@ def _answer_forecast(question: str, lang: str = "en") -> dict[str, Any]:
         user_prompt=user_prompt,
     )
     if result.ok:
+        text = sanitize_llm_text(result.text)
+        if not _llm_response_is_consistent(text, ctx):
+            return {
+                "answer": _forecast_to_text(forecast),
+                "sources_used": sources,
+                "llm_used": False,
+                "fallback_reason": "llm_state_mismatch",
+                "forecast": structured,
+                "detected_language": lang,
+            }
         return {
-            "answer": result.text,
+            "answer": text,
             "sources_used": sources,
             "llm_used": True,
             "forecast": structured,

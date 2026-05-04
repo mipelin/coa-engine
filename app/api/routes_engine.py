@@ -60,6 +60,12 @@ async def llm_health():
     return get_llm_orchestrator().run_health_check()
 
 
+@router.post("/llm/test-chat")
+async def llm_test_chat():
+    """On-demand chat completions path validation. Sends a tiny request to llama.cpp."""
+    return get_llm_client().test_chat()
+
+
 @router.get("/llm/status")
 async def llm_status():
     orchestrator = get_llm_orchestrator()
@@ -538,7 +544,14 @@ async def load_scenario(scenario_id: str):
 async def set_assets(assets: list[AssetState]):
     store = get_state_store()
     store.set_asset_states(asset_states=assets)
-    return {"status": "ok", "assets": [asset.model_dump(mode="json") for asset in store.get_asset_states()]}
+    analysis = None
+    if store.get_contacts():
+        analysis = get_event_loop().run_analysis_now(trigger="asset_state_update")
+    return {
+        "status": "ok",
+        "assets": [asset.model_dump(mode="json") for asset in store.get_asset_states()],
+        "analysis": analysis,
+    }
 
 
 @router.post("/tick")
@@ -660,9 +673,10 @@ async def stop_engine():
 
 
 @router.get("/briefing")
-async def generate_briefing(lang: str = "en"):
+async def generate_briefing(lang: str | None = None):
     loop = get_event_loop()
-    result = loop.run_full_briefing(language=lang)
+    requested_language = lang or get_state_store().get_ui_language()
+    result = loop.run_full_briefing(language=requested_language)
     return result
 
 
@@ -875,7 +889,7 @@ async def run_coa_optimization(payload: dict | None = None):
 async def query_operational_state(payload: dict):
     """Answer a natural-language question about current operational state."""
     question = payload.get("question", "").strip()
-    ui_language_hint = payload.get("ui_language_hint") or None
+    ui_language_hint = payload.get("ui_language_hint") or get_state_store().get_ui_language() or None
     force_language = payload.get("force_language") or None
     if not question:
         return {"answer": "No question provided.", "sources_used": [], "llm_used": False}

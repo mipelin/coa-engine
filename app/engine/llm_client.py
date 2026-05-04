@@ -16,6 +16,22 @@ UNSAFE_WORDS = [
     "execute order", "fire", "destroy", "neutralize",
 ]
 
+# Phrase-level unsafe patterns — only redact when these exact phrases appear.
+# Single words like "engage", "target", "intercept" are safe in advisory context.
+_UNSAFE_PHRASES = [
+    r"authorize\s+engagement",
+    r"engage\s+(?:the\s+)?target",
+    r"fire\s+(?:on|upon)",
+    r"lethal\s+targeting",
+    r"bypass\s+(?:the\s+)?ROE",
+    r"ignore\s+(?:the\s+)?ROE",
+    r"neutralize\s+(?:with\s+)?force",
+    r"weapons\s+release",
+    r"execute\s+(?:a\s+)?strike",
+    r"launch\s+(?:a\s+)?strike",
+    r"destroy\s+(?:the\s+)?target",
+]
+
 
 class LLMResult:
     """Structured result from an LLM call."""
@@ -256,6 +272,42 @@ class LLMClient:
             max_tokens=max_tokens,
         )
 
+    def test_chat(self) -> dict:
+        """Send a tiny chat request to validate the full completions path."""
+        result: dict = {
+            "configured": self.enabled,
+            "base_url": self.base_url,
+            "model": self._resolved_model or self.model,
+            "reachable": False,
+            "chat_ok": False,
+            "api_key_present": settings.llm_api_key_present,
+        }
+        if not self.enabled:
+            result["error"] = "LLM disabled"
+            return result
+        started_at = time.monotonic()
+        try:
+            llm_result = self.chat_sync(
+                system_prompt="Reply with exactly one word.",
+                user_prompt="Reply with OK only.",
+                max_tokens=8,
+            )
+            duration_ms = (time.monotonic() - started_at) * 1000
+            result["reachable"] = True
+            result["duration_ms"] = round(duration_ms, 0)
+            result["model"] = self._resolved_model or self.model
+            if llm_result.ok:
+                result["chat_ok"] = True
+                result["response_excerpt"] = (llm_result.text or "")[:50]
+            else:
+                result["chat_ok"] = False
+                result["error"] = llm_result.fallback_reason
+        except Exception as exc:
+            duration_ms = (time.monotonic() - started_at) * 1000
+            result["duration_ms"] = round(duration_ms, 0)
+            result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
     def probe_sync(self) -> dict:
         """Lightweight reachability probe using /models. Never calls the model."""
         result: dict = {
@@ -288,10 +340,17 @@ class LLMClient:
         return result
 
     def _safety_filter(self, text: str) -> str:
-        for word in UNSAFE_WORDS:
-            if word.lower() in text.lower():
-                logger.warning("UNSAFE_WORD detected: '%s' — redacting", word)
-                text = re.sub(re.escape(word), "[REDACTED]", text, flags=re.IGNORECASE)
+        """Phrase-based safety filter for LLM output.
+
+        Only redacts clearly unsafe phrases (authorization, lethal targeting, ROE bypass).
+        Does NOT redact individual words like 'engage', 'target', 'intercept'
+        that are normal operational vocabulary in advisory context.
+        """
+        for pattern in _UNSAFE_PHRASES:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                logger.warning("UNSAFE_PHRASE detected: '%s' — redacting", match.group())
+                text = re.sub(pattern, "[REDACTED]", text, flags=re.IGNORECASE)
         return text
 
 

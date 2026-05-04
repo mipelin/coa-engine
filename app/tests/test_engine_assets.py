@@ -72,6 +72,36 @@ def test_engine_assets_endpoint_updates_central_state(client):
     assert by_id["maritime_patrol_asset"]["status"] == "unavailable"
 
 
+def test_engine_assets_endpoint_triggers_immediate_reanalysis(client):
+    client.post("/v1/engine/reset")
+    client.post("/v1/engine/scenario/baltic_hybrid_001")
+    resp = client.post("/v1/engine/assets", json=[
+        {
+            "asset_id": "isr_uav",
+            "asset_type": "isr_uav",
+            "quantity_total": 2,
+            "quantity_available": 2,
+            "status": "available",
+            "domain": "air",
+            "display_name": "ISR UAV",
+        },
+        {
+            "asset_id": "maritime_patrol_vessel",
+            "asset_type": "maritime_patrol_vessel",
+            "quantity_total": 2,
+            "quantity_available": 2,
+            "status": "available",
+            "domain": "maritime",
+            "display_name": "Maritime Patrol Vessel",
+        },
+    ])
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["analysis"]["analysis_run"] is True
+    assert body["analysis"]["trigger"] == "asset_state_update"
+    assert body["analysis"]["recommended_coa"] is not None
+
+
 def test_recommendation_endpoint_accepts_asset_states(client):
     resp = client.post("/v1/coa/recommendation/run", json={
         "asset_states": [
@@ -100,8 +130,9 @@ def test_recommendation_endpoint_accepts_asset_states(client):
     })
     assert resp.status_code == 200
     body = resp.json()
-    assert body["recommended"]["coa"]["source"] == "template_engine"
-    assert body["recommended"]["coa"]["feasibility_status"] in ("feasible", "partially_feasible", "infeasible")
+    assert body["status"] == "no_viable_coa"
+    assert body["recommended"] is None
+    assert body["reason"] == "No assets available or all options infeasible"
 
 
 def test_manual_injection_forces_immediate_reanalysis(client):

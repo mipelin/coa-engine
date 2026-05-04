@@ -1,3 +1,10 @@
+"""Deterministic proximity-based contact correlation.
+
+Produces fused tracks from multi-source observations using fixed-threshold
+spatiotemporal clustering. This is NOT sensor-level data fusion with
+uncertainty propagation — it correlates contact reports within an 8 km / 45 min
+window based on kinematic compatibility.
+"""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field

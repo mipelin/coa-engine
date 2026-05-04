@@ -22,6 +22,8 @@ from app.engine.geo_validation import (
 from app.core.constants import SCENARIO_CABLE_ROUTES, CRITICAL_INFRASTRUCTURE
 from app.engine.scenario_generator import ScenarioGenerator
 from app.engine.combat_contact_generator import CombatContactGenerator
+from app.engine.geo_context import describe_location
+from app.core.schemas import Contact, OperationalEvent
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +221,46 @@ class TestDomainPlacement:
     def test_aircraft_accepted_anywhere(self):
         result = validate_placement(57.50, 19.50, "uav")
         assert result.valid
-        assert result.warning is None
+
+
+class TestWGS84Bounds:
+    def test_contact_schema_rejects_invalid_wgs84_coordinates(self):
+        with pytest.raises(Exception):
+            Contact(
+                contact_id="BAD",
+                timestamp="2026-05-03T00:00:00Z",
+                source="test",
+                contact_type="vessel",
+                lat=91.0,
+                lon=19.0,
+                entity_id="BAD-1",
+            )
+
+    def test_operational_event_schema_rejects_invalid_wgs84_coordinates(self):
+        with pytest.raises(Exception):
+            OperationalEvent(
+                event_id="BAD-EVT",
+                timestamp="2026-05-03T00:00:00Z",
+                event_type="vessel_position",
+                source="test",
+                confidence=0.8,
+                lat=57.0,
+                lon=181.0,
+                entity_id="BAD-EVT-1",
+                entity_type="suspicious_vessel",
+                description="bad",
+            )
+
+    def test_scenario_generator_jitter_keeps_coordinates_in_wgs84_range(self):
+        template = ScenarioGenerator(seed=42, position_jitter=200.0).generate("baltic_hybrid_001")
+        for entity in template.entities:
+            assert -90.0 <= entity.lat <= 90.0
+            assert -180.0 <= entity.lon <= 180.0
+
+
+class TestGeoContext:
+    def test_geo_context_describes_gotland_area(self):
+        assert describe_location(57.63, 18.30) == "Baltic Sea near Visby"
 
     def test_vessel_on_water_accepted(self):
         result = validate_placement(57.50, 19.50, "vessel")

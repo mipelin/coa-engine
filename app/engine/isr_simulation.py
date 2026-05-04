@@ -17,6 +17,7 @@ from typing import Any, Iterable
 from ..core.config import settings
 from ..core.schemas import Contact, OperationalEvent
 from .feature_engineering import haversine_km
+from .geo_validation import clamp_wgs84
 
 
 def _stable_seed(*parts: object) -> int:
@@ -30,11 +31,11 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 def _jitter_position(lat: float, lon: float, sigma_km: float, rng: random.Random) -> tuple[float, float]:
     if sigma_km <= 0:
-        return lat, lon
+        return clamp_wgs84(lat, lon)
     dlat = rng.gauss(0.0, sigma_km / 111.0)
     lat_safe = max(0.1, abs(lat))
     dlon = rng.gauss(0.0, sigma_km / (111.0 * math.cos(math.radians(lat_safe))))
-    return lat + dlat, lon + dlon
+    return clamp_wgs84(lat + dlat, lon + dlon)
 
 
 def _normalize_entity_type(contact: Contact | None = None, event: OperationalEvent | None = None) -> str:
